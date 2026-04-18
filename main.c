@@ -12,6 +12,7 @@
 #include "diag.h"
 #include "ipcache.h"
 #include "resolve.h"
+#include "bags.h"
 
 extern int   yyparse(void);
 extern FILE *yyin;
@@ -911,12 +912,15 @@ int main(int argc, char **argv) {
             print_rules();
             resolve_all_rules();
             print_resolutions();
+            build_bags();
+            print_bags();
         }
     }
 
     free_all();
     free_rules();
     free_resolutions();
+    free_bags();
     free(source);
     ipcache_free();
     return rc;
