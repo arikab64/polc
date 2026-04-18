@@ -20,6 +20,8 @@ import sqlite3InitModule, {
 
 import type {
   Asset,
+  Bags,
+  BagEntry,
   DnfTerm,
   Label,
   LoadedDb,
@@ -300,6 +302,82 @@ function loadRules(db: Database): Rule[] {
   }))
 }
 
+/* ------------------------------------------------------------------ */
+/* bags                                                               */
+/* ------------------------------------------------------------------ */
+
+interface RawBagvecBitRow { bag_id: number; rule_id: number }
+interface RawBagEidRow    { key: bigint | number; bag_id: number }
+interface RawBagPortRow   { key: number; bag_id: number }
+interface RawBagProtoRow  { key: string; bag_id: number }
+
+function loadBags(db: Database): Bags {
+  // One query for all the bit rows — pivot in JS to avoid N+1 queries.
+  const ruleIdsByBag = new Map<number, number[]>()
+  let maxRuleId = 0
+  db.exec({
+    sql: 'SELECT bag_id, rule_id FROM bagvec_bit ORDER BY bag_id, rule_id',
+    rowMode: 'object',
+    callback: (row) => {
+      const r = row as unknown as RawBagvecBitRow
+      const list = ruleIdsByBag.get(r.bag_id) ?? []
+      list.push(r.rule_id)
+      ruleIdsByBag.set(r.bag_id, list)
+      if (r.rule_id > maxRuleId) maxRuleId = r.rule_id
+    },
+  })
+
+  const eidEntries = (sql: string): BagEntry[] => {
+    const out: BagEntry[] = []
+    db.exec({
+      sql,
+      rowMode: 'object',
+      callback: (row) => {
+        const r = row as unknown as RawBagEidRow
+        out.push({
+          key: eidToHex(r.key),
+          bagId: r.bag_id,
+          ruleIds: ruleIdsByBag.get(r.bag_id) ?? [],
+        })
+      },
+    })
+    return out
+  }
+
+  const src = eidEntries('SELECT eid_hash AS key, bag_id FROM bag_src')
+  const dst = eidEntries('SELECT eid_hash AS key, bag_id FROM bag_dst')
+
+  const port: BagEntry[] = []
+  db.exec({
+    sql: 'SELECT port AS key, bag_id FROM bag_port ORDER BY port',
+    rowMode: 'object',
+    callback: (row) => {
+      const r = row as unknown as RawBagPortRow
+      port.push({
+        key: String(r.key),
+        bagId: r.bag_id,
+        ruleIds: ruleIdsByBag.get(r.bag_id) ?? [],
+      })
+    },
+  })
+
+  const proto: BagEntry[] = []
+  db.exec({
+    sql: 'SELECT proto AS key, bag_id FROM bag_proto ORDER BY proto',
+    rowMode: 'object',
+    callback: (row) => {
+      const r = row as unknown as RawBagProtoRow
+      proto.push({
+        key: r.key,
+        bagId: r.bag_id,
+        ruleIds: ruleIdsByBag.get(r.bag_id) ?? [],
+      })
+    },
+  })
+
+  return { src, dst, port, proto, maxRuleId }
+}
+
 function countRow(db: Database, sql: string): number {
   let result = 0
   db.exec({
@@ -360,6 +438,7 @@ async function handleOpen(buffer: ArrayBuffer, filename: string): Promise<void> 
 
     const assets = loadAssets(db)
     const rules = loadRules(db)
+    const bags = loadBags(db)
     const stats = {
       rules: countRow(db, 'SELECT COUNT(*) FROM rule'),
       inventory: countRow(db, 'SELECT COUNT(*) FROM entity'),
@@ -395,6 +474,7 @@ async function handleOpen(buffer: ArrayBuffer, filename: string): Promise<void> 
       stats,
       assets,
       rules,
+      bags,
       allLabels,
       allAssetNames,
       allIps,

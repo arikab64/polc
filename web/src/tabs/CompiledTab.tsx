@@ -2,6 +2,7 @@ import { useState } from 'react'
 import type { LoadedDb } from '../lib/types'
 import { EnforcementIdentitiesTab } from './compiled/EnforcementIdentitiesTab'
 import { EndpointTab } from './compiled/EndpointTab'
+import { BagVectorTab } from './compiled/BagVectorTab'
 
 type InnerTabId = 'eids' | 'endpoint' | 'bags'
 
@@ -51,21 +52,8 @@ export function CompiledTab({ db }: CompiledTabProps) {
       <div className="compiled-body">
         {inner === 'eids' && <EnforcementIdentitiesTab db={db} />}
         {inner === 'endpoint' && <EndpointTab db={db} />}
-        {inner === 'bags' && <BagsStub />}
+        {inner === 'bags' && <BagVectorTab db={db} />}
       </div>
-    </div>
-  )
-}
-
-function BagsStub() {
-  return (
-    <div className="stub">
-      <h2 className="stub-title">Bag Vectors</h2>
-      <p className="stub-body">
-        Will render the compiled runtime enforcement state — the four bag maps
-        (bag_src, bag_dst, bag_port, bag_proto) and the interned bag-vector
-        store they reference. Not implemented yet.
-      </p>
     </div>
   )
 }

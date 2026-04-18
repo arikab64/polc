@@ -53,3 +53,40 @@ export function compactNum(n: number): string {
   if (n < 1_000_000) return (n / 1000).toFixed(n < 10_000 ? 1 : 0) + 'k'
   return (n / 1_000_000).toFixed(1) + 'M'
 }
+
+/**
+ * Render a sparse bitvector (given as a list of set rule IDs) as a hex
+ * string of `byteCount` bytes (2 hex chars each).
+ *
+ * Endianness: LSB-first per byte, byte 0 covers rules 0..7. So rules
+ * 0,1,2,3,4 set → last byte is 0x1F and the full hex reads ...001F.
+ * Result is uppercase with a `0x` prefix.
+ */
+export function bitvecToHex(ruleIds: number[], byteCount: number): string {
+  const bytes = new Uint8Array(byteCount)
+  for (const rid of ruleIds) {
+    if (rid < 0) continue
+    const byteIdx = rid >>> 3
+    const bitIdx = rid & 7
+    if (byteIdx >= byteCount) continue
+    bytes[byteIdx] |= 1 << bitIdx
+  }
+  // Render MSB first — reverse the array into a hex string.
+  let out = ''
+  for (let i = byteCount - 1; i >= 0; i--) {
+    out += bytes[i].toString(16).padStart(2, '0').toUpperCase()
+  }
+  return '0x' + out
+}
+
+/**
+ * Truncate a long hex string for table display. Keeps the first `head`
+ * and last `tail` hex chars joined with an ellipsis — skips truncation
+ * if the string is short enough to fit naturally.
+ */
+export function truncateHex(hex: string, head = 4, tail = 8): string {
+  // `0x` + hex chars; preserve the prefix
+  const bare = hex.startsWith('0x') ? hex.slice(2) : hex
+  if (bare.length <= head + tail + 1) return hex
+  return '0x' + bare.slice(0, head) + '…' + bare.slice(-tail)
+}

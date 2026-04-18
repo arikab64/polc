@@ -68,12 +68,45 @@ export interface InventoryStats {
   inventory: number
 }
 
+/**
+ * A single row in one of the four bag maps.
+ *
+ * `key` is either an EID hex (for bag_src / bag_dst), a port number as
+ * string (for bag_port), or a proto name (for bag_proto). Unifying them
+ * as string keeps the type uniform for rendering — the concrete bag knows
+ * how to interpret it.
+ *
+ * `ruleIds` is the expanded bitvector: the sorted list of rule IDs that
+ * bit is set for. Compact even for sparse bags since we only store set bits.
+ */
+export interface BagEntry {
+  key: string
+  /** `bagvec.id` — useful for coalescing rows that share a vector. */
+  bagId: number
+  ruleIds: number[]
+}
+
+/**
+ * The four bags together, plus the max rule_id observed across all of
+ * them (needed to decide how many 512-wide visual rows to render).
+ */
+export interface Bags {
+  src: BagEntry[]
+  dst: BagEntry[]
+  port: BagEntry[]
+  proto: BagEntry[]
+  /** Highest rule_id seen in any bag's bitvector — drives display
+   *  row count. Ceil((maxRuleId+1) / 512). 0 if no bits are set anywhere. */
+  maxRuleId: number
+}
+
 export interface LoadedDb {
   /** source filename, as displayed after `bin=` */
   filename: string
   stats: InventoryStats
   assets: Asset[]
   rules: Rule[]
+  bags: Bags
   /* --- inventory filter options --- */
   /** distinct (key,value) pairs across the whole inventory — for the
    * Labels column filter popover */
