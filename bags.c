@@ -411,6 +411,42 @@ bag_id_t bag_proto_id(int proto) {
     return bagmap_find(&g_bag_proto, (uint64_t)proto, &id) ? id : BAG_ID_ZERO;
 }
 
+size_t bagvec_count(void) { return g_vecs.n; }
+
+/* Generic walker — called by the four type-specific wrappers. */
+static void bagmap_foreach(const bagmap *b,
+                           void (*cb)(uint64_t, bag_id_t, void *), void *ud) {
+    if (!b->slots) return;
+    for (size_t i = 0; i < b->cap; i++)
+        if (b->slots[i].state)
+            cb(b->slots[i].key, b->slots[i].id, ud);
+}
+
+/* Tiny shims to let the typed visitors take more specific first args
+ * without casting fn pointers (which would be undefined behavior). */
+struct bag_src_shim   { bag_src_visitor   fn; void *ud; };
+struct bag_dst_shim   { bag_dst_visitor   fn; void *ud; };
+struct bag_port_shim  { bag_port_visitor  fn; void *ud; };
+struct bag_proto_shim { bag_proto_visitor fn; void *ud; };
+
+static void src_cb  (uint64_t k, bag_id_t id, void *s)
+    { struct bag_src_shim   *sh = s; sh->fn(k,         id, sh->ud); }
+static void dst_cb  (uint64_t k, bag_id_t id, void *s)
+    { struct bag_dst_shim   *sh = s; sh->fn(k,         id, sh->ud); }
+static void port_cb (uint64_t k, bag_id_t id, void *s)
+    { struct bag_port_shim  *sh = s; sh->fn((int)k,    id, sh->ud); }
+static void proto_cb(uint64_t k, bag_id_t id, void *s)
+    { struct bag_proto_shim *sh = s; sh->fn((int)k,    id, sh->ud); }
+
+void bag_src_foreach  (bag_src_visitor   fn, void *ud)
+    { struct bag_src_shim   sh = { fn, ud }; bagmap_foreach(&g_bag_src,   src_cb,   &sh); }
+void bag_dst_foreach  (bag_dst_visitor   fn, void *ud)
+    { struct bag_dst_shim   sh = { fn, ud }; bagmap_foreach(&g_bag_dst,   dst_cb,   &sh); }
+void bag_port_foreach (bag_port_visitor  fn, void *ud)
+    { struct bag_port_shim  sh = { fn, ud }; bagmap_foreach(&g_bag_port,  port_cb,  &sh); }
+void bag_proto_foreach(bag_proto_visitor fn, void *ud)
+    { struct bag_proto_shim sh = { fn, ud }; bagmap_foreach(&g_bag_proto, proto_cb, &sh); }
+
 /* ============================================================
  *  print
  * ============================================================ */

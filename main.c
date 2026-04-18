@@ -13,6 +13,8 @@
 #include "ipcache.h"
 #include "resolve.h"
 #include "bags.h"
+#include "builder.h"
+#include "dump.h"
 
 extern int   yyparse(void);
 extern FILE *yyin;
@@ -21,18 +23,13 @@ extern FILE *yyin;
  *  LABEL TABLE — intern distinct (key,val) pairs, assign ids
  * ============================================================ */
 
-typedef struct label_entry {
-    char               *key;
-    char               *val;
-    int                 id;
-    struct label_entry *next;
-} label_entry;
-
 static label_entry *g_labels      = NULL;
 static label_entry *g_labels_tail = NULL;   /* O(1) append */
 static int          g_next_label_id = 1;
 
 int g_semantic_errors = 0;
+
+label_entry *label_list_head(void) { return g_labels; }
 
 int label_intern(const char *key, const char *val, int line, int col) {
     for (label_entry *e = g_labels; e; e = e->next) {
@@ -378,23 +375,12 @@ void print_identities(void) {
  * ============================================================ */
 
 /* Simple linked-list symbol tables. Lookup is linear; realistic var
- * counts are tiny. */
-typedef struct var_label_entry {
-    char                    *name;
-    label_node              *labels;      /* canonical copy, never mutated */
-    int                      line, col;
-    struct var_label_entry  *next;
-} var_label_entry;
-
-typedef struct var_port_entry {
-    char                    *name;
-    port_node               *ports;
-    int                      line, col;
-    struct var_port_entry   *next;
-} var_port_entry;
-
+ * counts are tiny. (Types declared in ast.h so the builder can walk them.) */
 static var_label_entry *g_vlabels = NULL;
 static var_port_entry  *g_vports  = NULL;
+
+var_label_entry *var_label_head(void) { return g_vlabels; }
+var_port_entry  *var_port_head (void) { return g_vports;  }
 
 /* Deep-copy helpers — variable expansion needs fresh nodes each time so
  * the original definition stays intact for subsequent references. */
@@ -867,20 +853,146 @@ static char *slurp(FILE *f) {
     return buf;
 }
 
+/* gcc-style "no input files" diagnostic. */
+static void emit_no_input(void) {
+    fprintf(stderr, "polc: fatal error: no input files\n");
+    fprintf(stderr, "compilation terminated.\n");
+}
+
+/* Derive a sibling path by swapping the extension.
+ *   "out.db"          -> "out.txt"
+ *   "a.b.db"          -> "a.b.txt"   (strip last extension only)
+ *   "out"             -> "out.txt"   (no extension → just append)
+ *   "./build/out.db"  -> "./build/out.txt"
+ *   ".hidden"         -> ".hidden.txt" (leading dot is not an extension)
+ *
+ * Returns a malloc'd string the caller frees. */
+static char *replace_ext(const char *path, const char *new_ext) {
+    /* Locate the last '/' so we can confine the search to the basename. */
+    const char *basename = strrchr(path, '/');
+    basename = basename ? basename + 1 : path;
+
+    /* Last '.' inside the basename — and it must not be at position 0
+     * (so ".hidden" isn't mistaken for an empty-stem dotfile extension). */
+    const char *dot = strrchr(basename, '.');
+    size_t stem_len = (dot && dot > basename)
+        ? (size_t)(dot - path)
+        : strlen(path);
+
+    size_t n = stem_len + 1 /* dot */ + strlen(new_ext) + 1 /* NUL */;
+    char *out = malloc(n);
+    memcpy(out, path, stem_len);
+    out[stem_len] = '.';
+    strcpy(out + stem_len + 1, new_ext);
+    return out;
+}
+
+static void usage(FILE *out) {
+    fprintf(out,
+        "Usage: polc -i <input.gc> [-o <out.db>] [options]\n"
+        "  -i FILE      input policy file (required)\n"
+        "  -o FILE      output SQLite database (default: out.db)\n"
+        "  --debug      include symbolic/debug tables (labels, DNF, entity\n"
+        "               names, variables, source positions).\n"
+        "  -v, --verbose\n"
+        "               print the full compilation log (label table, EIDs,\n"
+        "               ipcache, rules, resolutions, bags). Default is a\n"
+        "               one-line summary.\n"
+        "  --dump       after compiling, write a human-readable dump of\n"
+        "               every table in the output DB to a sibling .txt\n"
+        "               file (same path as -o, extension swapped to .txt).\n"
+        "  -h, --help   show this message.\n");
+}
+
+/* One-line compile summary — the default (non-verbose) compile log output. */
+static void print_summary(int n_labels, int n_eids, int n_rules,
+                          int n_resolved, int n_unresolved,
+                          size_t n_bagvecs) {
+    fprintf(stderr,
+        "polc: compiled %d label%s, %d EID%s, %d rule%s (%d resolved, %d unresolved), "
+        "%zu bagvec%s\n",
+        n_labels, n_labels == 1 ? "" : "s",
+        n_eids,   n_eids   == 1 ? "" : "s",
+        n_rules,  n_rules  == 1 ? "" : "s",
+        n_resolved, n_unresolved,
+        n_bagvecs, n_bagvecs == 1 ? "" : "s");
+}
+
+/* Helper: count list lengths for the summary. */
+static int count_labels(void) {
+    int n = 0;
+    for (label_entry *e = label_list_head(); e; e = e->next) n++;
+    return n;
+}
+static int count_eids(void) {
+    int n = 0;
+    for (eid_node *e = eid_list_head(); e; e = e->next) n++;
+    return n;
+}
+static int count_rules(void) {
+    int n = 0;
+    for (rule_node *r = rule_list_head(); r; r = r->next) n++;
+    return n;
+}
+static int count_resolved(void) {
+    int n = 0;
+    for (resolved_rule *r = resolutions_head(); r; r = r->next) n++;
+    return n;
+}
+static int count_unresolved(void) {
+    int n = 0;
+    for (resolved_rule *r = unresolved_head(); r; r = r->next) n++;
+    return n;
+}
+
 int main(int argc, char **argv) {
     const char *filename = NULL;
-    FILE *src = stdin;
-    if (argc > 1) {
-        filename = argv[1];
-        src = fopen(filename, "r");
-        if (!src) { perror(filename); return 1; }
+    const char *out_path = "out.db";
+    int         debug    = 0;
+    int         verbose  = 0;
+    int         do_dump  = 0;
+
+    /* Manual argv walk. */
+    for (int i = 1; i < argc; i++) {
+        const char *a = argv[i];
+        if (strcmp(a, "-i") == 0) {
+            if (i + 1 >= argc) {
+                fprintf(stderr, "polc: error: -i requires a filename\n");
+                return 1;
+            }
+            filename = argv[++i];
+        } else if (strcmp(a, "-o") == 0) {
+            if (i + 1 >= argc) {
+                fprintf(stderr, "polc: error: -o requires a filename\n");
+                return 1;
+            }
+            out_path = argv[++i];
+        } else if (strcmp(a, "--debug") == 0) {
+            debug = 1;
+        } else if (strcmp(a, "-v") == 0 || strcmp(a, "--verbose") == 0) {
+            verbose = 1;
+        } else if (strcmp(a, "--dump") == 0) {
+            do_dump = 1;
+        } else if (strcmp(a, "-h") == 0 || strcmp(a, "--help") == 0) {
+            usage(stdout);
+            return 0;
+        } else {
+            fprintf(stderr, "polc: error: unrecognized argument '%s'\n", a);
+            usage(stderr);
+            return 1;
+        }
     }
 
-    /* Slurp source so the diagnostic printer can echo offending lines.
-     * We then parse from a memory buffer, not the file, so both the
-     * scanner and the error printer see identical bytes. */
+    if (!filename) {
+        emit_no_input();
+        return 1;
+    }
+
+    FILE *src = fopen(filename, "r");
+    if (!src) { perror(filename); return 1; }
+
     char *source = slurp(src);
-    if (src != stdin) fclose(src);
+    fclose(src);
     if (!source) {
         fprintf(stderr, "error: could not read source\n");
         return 1;
@@ -900,20 +1012,45 @@ int main(int argc, char **argv) {
                 g_semantic_errors, g_semantic_errors == 1 ? "" : "s");
         rc = 1;
     } else {
-        print_label_table();
-        print_identities();
+        /* The interior print_* calls only run under --verbose. Everything
+         * else (build_ipcache, resolve_all_rules, build_bags, build_sqlite)
+         * always runs — they produce the artifacts. */
+        if (verbose) print_label_table();
+        if (verbose) print_identities();
         build_ipcache();
         if (g_semantic_errors > 0) {
             fprintf(stderr, "compilation failed: %d semantic error%s.\n",
                     g_semantic_errors, g_semantic_errors == 1 ? "" : "s");
             rc = 1;
         } else {
-            print_ipcache();
-            print_rules();
+            if (verbose) print_ipcache();
+            if (verbose) print_rules();
             resolve_all_rules();
-            print_resolutions();
+            if (verbose) print_resolutions();
             build_bags();
-            print_bags();
+            if (verbose) print_bags();
+
+            if (build_sqlite(out_path, filename, debug) != 0) {
+                fprintf(stderr, "polc: error: failed to write %s\n", out_path);
+                rc = 1;
+            } else {
+                /* Summary line — the default compile log output. */
+                print_summary(count_labels(), count_eids(), count_rules(),
+                              count_resolved(), count_unresolved(),
+                              bagvec_count());
+                fprintf(stderr, "polc: wrote %s%s\n",
+                        out_path, debug ? " (with debug tables)" : "");
+
+                if (do_dump) {
+                    char *txt_path = replace_ext(out_path, "txt");
+                    if (dump_db(out_path, txt_path) != 0) {
+                        rc = 1;
+                    } else {
+                        fprintf(stderr, "polc: dumped to %s\n", txt_path);
+                    }
+                    free(txt_path);
+                }
+            }
         }
     }
 

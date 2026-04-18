@@ -223,6 +223,44 @@ int         label_intern(const char *key, const char *val, int line, int col);
 /* Look up a label by id — returns 1 and fills key_out/val_out on hit, 0 on miss. */
 int         label_lookup(int id, const char **key_out, const char **val_out);
 
+/* Reverse lookup: returns the id (>=1) if (key, val) is interned, 0 if not. */
+int         label_lookup_id(const char *key, const char *val);
+
+/* ---------- accessors for the builder (SQLite emitter) -----------------
+ * These expose the main.c-owned lists in a read-only, walk-friendly form.
+ * --------------------------------------------------------------------- */
+
+/* Interned labels — the rows of the "label" table. */
+typedef struct label_entry {
+    char               *key;
+    char               *val;
+    int                 id;
+    struct label_entry *next;
+} label_entry;
+label_entry *label_list_head(void);
+
+/* Walkers for the other global lists. */
+eid_node    *eid_list_head (void);
+rule_node   *rule_list_head(void);
+
+/* $var definitions — source-level debugging info. */
+typedef struct var_label_entry {
+    char                    *name;
+    label_node              *labels;      /* expanded label list */
+    int                      line, col;
+    struct var_label_entry  *next;
+} var_label_entry;
+var_label_entry *var_label_head(void);
+
+/* @var definitions. */
+typedef struct var_port_entry {
+    char                    *name;
+    port_node               *ports;
+    int                      line, col;
+    struct var_port_entry   *next;
+} var_port_entry;
+var_port_entry  *var_port_head(void);
+
 /* Global error counter — any module can bump this; main checks it at end. */
 extern int  g_semantic_errors;
 
