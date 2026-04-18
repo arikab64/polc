@@ -185,6 +185,63 @@ input[type="search"]:focus {
   font-weight: 400;
 }
 
+/* ===== inner tabs (compiled tab's sub-navigation) ===== */
+
+.compiled-shell {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.inner-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 10px 24px 0 24px;
+  border-bottom: 1px solid var(--line);
+  background: var(--bg-raised);
+  flex-shrink: 0;
+}
+
+.inner-tab {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  padding: 5px 12px;
+  margin-bottom: -1px;
+  color: var(--ink-muted);
+  background: transparent;
+  border: 1px solid transparent;
+  border-bottom: none;
+  transition: all 120ms ease;
+}
+
+.inner-tab:hover {
+  color: var(--ink);
+}
+
+.inner-tab[aria-selected="true"] {
+  background: var(--bg);
+  color: var(--ink);
+  border-color: var(--line);
+  border-bottom-color: var(--bg);
+  font-weight: 500;
+}
+
+.compiled-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.compiled-body > * {
+  flex: 1;
+  min-height: 0;
+}
+
 /* ===== status line ===== */
 
 .statusline {
@@ -939,4 +996,57 @@ input[type="search"]:focus {
 .asset-empty {
   font-family: var(--font-mono);
   color: var(--ink-dim);
+}
+
+/* =========================================================
+ * Enforcement Identities — expression panel
+ * ========================================================= */
+
+/* Wider than the rules-panel since it holds a multi-line textarea. */
+.expression-panel {
+  width: 380px;
+  flex-shrink: 0;
+  border-left: 1px solid var(--line);
+  background: var(--bg);
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+}
+
+.expression-panel .asset-box:first-child {
+  /* visually ground the expression input box a bit more than the
+   * downstream boxes — it's the primary action on the panel */
+  background: var(--bg-raised);
+}
+
+.expr-input {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--ink);
+  background: var(--bg-input);
+  border: 1px solid var(--line);
+  padding: 8px 10px;
+  width: 100%;
+  resize: vertical;
+  min-height: 64px;
+  line-height: 1.5;
+  letter-spacing: 0.01em;
+}
+
+.expr-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.expr-input::placeholder {
+  color: var(--ink-dim);
+  opacity: 0.7;
+}
+
+.expr-error {
+  margin-top: 8px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: #a43420;
+  letter-spacing: 0.02em;
 }
