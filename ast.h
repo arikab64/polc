@@ -204,6 +204,12 @@ void       add_rule(action_kind a, int line, int col,
 
 void       print_rules(void);
 
+/* Phase-3 intermediate: for each rule, compute which EIDs match its src
+ * and dst selectors. Stored in a global side-table so the bag builder
+ * and the debugger can both read it. Returns the number of rules resolved. */
+int        resolve_rule_selectors(void);
+void       print_rule_resolution(void);
+
 void        print_label_table(void);
 void        print_identities(void);
 void        print_ipcache(void);

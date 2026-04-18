@@ -11,6 +11,7 @@
 #include "ast.h"
 #include "diag.h"
 #include "ipcache.h"
+#include "resolve.h"
 
 extern int   yyparse(void);
 extern FILE *yyin;
@@ -62,6 +63,16 @@ int label_lookup(int id, const char **key_out, const char **val_out) {
             return 1;
         }
     }
+    return 0;
+}
+
+/* Lookup by (key,val) — returns the id (>=1) if interned, 0 if not.
+ * This is the read-only counterpart to label_intern; used by the resolver
+ * to check whether a selector references a known label. */
+int label_lookup_id(const char *key, const char *val) {
+    for (label_entry *e = g_labels; e; e = e->next)
+        if (strcmp(e->key, key) == 0 && strcmp(e->val, val) == 0)
+            return e->id;
     return 0;
 }
 
@@ -139,6 +150,10 @@ label_node *label_append(label_node *head, label_node *node) {
 
 static eid_node *g_eids      = NULL;
 static eid_node *g_eids_tail = NULL;
+
+/* Accessor for resolve.c and any future consumers that need to walk
+ * the parsed EIDs without owning the storage. */
+eid_node *eid_list_head(void) { return g_eids; }
 
 /* Find the identity with this exact bitset, or NULL. */
 static eid_node *eid_find(const label_set *labels) {
@@ -506,6 +521,8 @@ static void free_sel(sel_node *s);
 
 static rule_node *g_rules      = NULL;
 static rule_node *g_rules_tail = NULL;
+
+rule_node *rule_list_head(void) { return g_rules; }
 
 sel_node *sel_leaf(const char *k, const char *v, int line, int col) {
     sel_node *n = calloc(1, sizeof *n);
@@ -892,11 +909,14 @@ int main(int argc, char **argv) {
         } else {
             print_ipcache();
             print_rules();
+            resolve_all_rules();
+            print_resolutions();
         }
     }
 
     free_all();
     free_rules();
+    free_resolutions();
     free(source);
     ipcache_free();
     return rc;

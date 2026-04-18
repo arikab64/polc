@@ -14,4 +14,9 @@ void diag_init(const char *filename, const char *source_text);
 void diag_error(int line, int col, const char *fmt, ...)
     __attribute__((format(printf, 3, 4)));
 
+/* Same shape, but prints "warning:" instead of "error:" and does NOT
+ * increment the semantic error counter — purely advisory. */
+void diag_warning(int line, int col, const char *fmt, ...)
+    __attribute__((format(printf, 3, 4)));
+
 #endif

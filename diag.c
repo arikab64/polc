@@ -29,23 +29,20 @@ static const char *find_line_start(int line) {
     return (curr == line) ? p : NULL;
 }
 
-void diag_error(int line, int col, const char *fmt, ...) {
-    /* Header: file:line:col: error: message */
-    if (col > 0) fprintf(stderr, "%s:%d:%d: error: ", g_filename, line, col);
-    else if (line > 0) fprintf(stderr, "%s:%d: error: ",   g_filename, line);
-    else                fprintf(stderr, "%s: error: ",      g_filename);
+/* Internal shared emitter — parameterized by the label ("error"/"warning"). */
+static void emit(const char *label, int line, int col,
+                 const char *fmt, va_list ap) {
+    if (col > 0)       fprintf(stderr, "%s:%d:%d: %s: ", g_filename, line, col, label);
+    else if (line > 0) fprintf(stderr, "%s:%d: %s: ",     g_filename, line, label);
+    else               fprintf(stderr, "%s: %s: ",        g_filename, label);
 
-    va_list ap;
-    va_start(ap, fmt);
     vfprintf(stderr, fmt, ap);
-    va_end(ap);
     fputc('\n', stderr);
 
     /* Source echo + caret (skip if we have no position or no source). */
     const char *start = find_line_start(line);
     if (!start) return;
 
-    /* Find end-of-line */
     const char *end = start;
     while (*end && *end != '\n') end++;
 
@@ -54,11 +51,21 @@ void diag_error(int line, int col, const char *fmt, ...) {
     if (col > 0) {
         fputs("    ", stderr);
         for (int i = 1; i < col; i++) {
-            /* Preserve tab stops so the caret lands in the right spot
-             * even when the line contains tabs. */
             char c = start[i - 1];
             fputc(c == '\t' ? '\t' : ' ', stderr);
         }
         fputs("^\n", stderr);
     }
+}
+
+void diag_error(int line, int col, const char *fmt, ...) {
+    va_list ap; va_start(ap, fmt);
+    emit("error", line, col, fmt, ap);
+    va_end(ap);
+}
+
+void diag_warning(int line, int col, const char *fmt, ...) {
+    va_list ap; va_start(ap, fmt);
+    emit("warning", line, col, fmt, ap);
+    va_end(ap);
 }

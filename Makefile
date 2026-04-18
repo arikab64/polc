@@ -8,7 +8,7 @@ YACC    = bison
 
 TARGET  = polc
 
-OBJS    = parser.tab.o lex.yy.o main.o diag.o ipcache.o
+OBJS    = parser.tab.o lex.yy.o main.o diag.o ipcache.o resolve.o
 
 .PHONY: all clean test
 
@@ -32,7 +32,7 @@ parser.tab.o: parser.tab.c ast.h diag.h
 lex.yy.o: lex.yy.c parser.tab.h ast.h diag.h
 	$(CC) $(CFLAGS) -c lex.yy.c
 
-main.o: main.c ast.h diag.h ipcache.h
+main.o: main.c ast.h diag.h ipcache.h resolve.h
 	$(CC) $(CFLAGS) -c main.c
 
 diag.o: diag.c diag.h
@@ -40,6 +40,9 @@ diag.o: diag.c diag.h
 
 ipcache.o: ipcache.c ipcache.h ast.h
 	$(CC) $(CFLAGS) -c ipcache.c
+
+resolve.o: resolve.c resolve.h ast.h diag.h
+	$(CC) $(CFLAGS) -c resolve.c
 
 test: $(TARGET)
 	./$(TARGET) policy.gc
