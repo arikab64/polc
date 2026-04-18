@@ -113,15 +113,17 @@ input[type="search"]:focus {
 .app-header {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  padding: 16px 24px 0 24px;
-  border-bottom: 1px solid transparent;
+  gap: 16px;
+  padding: 14px 24px;
+  border-bottom: 1px solid var(--line);
+  background: var(--bg);
 }
 
 .brand {
   display: flex;
   align-items: baseline;
   gap: 10px;
+  flex-shrink: 0;
 }
 
 .brand-mark {
@@ -198,10 +200,35 @@ input[type="search"]:focus {
   letter-spacing: 0.02em;
 }
 
+/* Variant: statusline sits inline in the header next to the Reload button.
+ * No background, no border, pushed to the right with margin-left: auto so
+ * the button still hugs the far edge. */
+.statusline--inline {
+  padding: 0;
+  border-bottom: none;
+  background: transparent;
+  margin-left: auto;
+  gap: 16px;
+  overflow: hidden;            /* long filenames shouldn't push the button off-screen */
+}
+
 .statusline-item {
   display: flex;
   align-items: baseline;
   gap: 5px;
+  white-space: nowrap;
+}
+
+.statusline--inline .statusline-item:last-child {
+  /* Allow the bin=<filename> item to shrink & ellipsize if needed. */
+  min-width: 0;
+  overflow: hidden;
+}
+
+.statusline--inline .statusline-item:last-child .statusline-value {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 240px;
 }
 
 .statusline-key {
@@ -249,8 +276,10 @@ input[type="search"]:focus {
 
 .main {
   flex: 1;
-  overflow: auto;
+  overflow: hidden;         /* inner scrollers (.inv-table-wrap, .rules-panel) handle it */
   padding: 0;
+  display: flex;
+  min-height: 0;
 }
 
 /* ===== inventory table ===== */
@@ -258,6 +287,8 @@ input[type="search"]:focus {
 .inv-table-wrap {
   overflow: auto;
   height: 100%;
+  flex: 1;
+  min-width: 0;   /* prevent table overflow from stretching the flex parent */
 }
 
 .inv-table {
@@ -484,6 +515,7 @@ input[type="search"]:focus {
   padding: 80px 24px;
   text-align: center;
   min-height: 400px;
+  flex: 1;
 }
 
 .state-panel-title {
@@ -522,6 +554,7 @@ input[type="search"]:focus {
   padding: 60px 24px;
   max-width: 680px;
   margin: 0 auto;
+  flex: 1;
 }
 
 .stub-title {
@@ -537,4 +570,373 @@ input[type="search"]:focus {
   color: var(--ink-muted);
   line-height: 1.7;
   font-size: 14px;
+}
+
+/* =========================================================
+ * RULES tab
+ * ========================================================= */
+
+.rules-table .th-rule-id,
+.rules-table .col-rule-id {
+  font-family: var(--font-mono);
+  color: var(--ink-dim);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  width: 1%;
+  white-space: nowrap;
+}
+
+.rules-table .th-resolved {
+  width: 1%;
+  padding-right: 4px !important;
+}
+
+/* Action chip — reuses the chip aesthetic but action-specific palettes.
+ * ALLOW = green like env-chip; BLOCK = red; OVERRIDE-* = amber accent
+ * to denote "elevated / forceful". */
+.action {
+  display: inline-block;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 500;
+  padding: 3px 10px;
+  border-radius: 2px;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+  border: 1px solid transparent;
+}
+
+.action--allow {
+  background: var(--chip-env-bg);
+  color: var(--chip-env-ink);
+  border-color: var(--chip-env-line);
+}
+
+.action--block {
+  background: #fbe4e1;
+  color: #9d2a18;
+  border-color: #efc4bf;
+}
+
+.action--override-allow {
+  background: var(--chip-env-bg);
+  color: var(--chip-env-ink);
+  border-color: var(--accent);
+  border-width: 1px;
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+.action--override-block {
+  background: #fbe4e1;
+  color: #9d2a18;
+  border-color: var(--accent);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+/* Resolved / unresolved icons */
+.resolved-icon {
+  display: inline-block;
+  vertical-align: middle;
+}
+.resolved-icon--ok {
+  color: var(--chip-env-ink);
+}
+.resolved-icon--no {
+  color: #a43420;
+}
+
+/* Unresolved rows fade slightly so they read as "parked / no effect". */
+.row--unresolved td {
+  opacity: 0.62;
+}
+.row--unresolved:hover td {
+  opacity: 1;
+}
+
+/* Selector expression — DNF with keywords inside */
+.selector {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  font-family: var(--font-mono);
+}
+
+.selector-term {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.selector-term--undefined {
+  opacity: 0.55;
+  text-decoration: line-through;
+  text-decoration-color: var(--ink-dim);
+  text-decoration-thickness: 1px;
+}
+
+.selector-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.selector-kw {
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ink-dim);
+  padding: 0 2px;
+}
+
+.selector-kw--or {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.selector-empty {
+  font-family: var(--font-mono);
+  color: var(--ink-dim);
+  font-size: 14px;
+}
+
+/* Port list column — mono, subtle */
+.col-ports {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--ink);
+  white-space: nowrap;
+}
+
+/* Protocol chips — smaller, outlined */
+.col-protos {
+  display: inline-flex;
+  gap: 4px;
+}
+
+.proto-chip {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  padding: 2px 7px;
+  border-radius: 2px;
+  background: transparent;
+  color: var(--ink-muted);
+  border: 1px solid var(--line-strong);
+}
+
+/* =========================================================
+ * RULES tab — two-column layout + side panel
+ * ========================================================= */
+
+.rules-layout {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  height: 100%;
+  align-items: stretch;
+}
+
+.rules-layout-main {
+  flex: 1;
+  min-width: 0;             /* without this, table overflow would push the panel off-screen */
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.rules-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--line);
+  background: var(--bg);
+}
+
+.panel-toggle {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  padding: 4px 10px;
+  color: var(--ink-muted);
+  border: 1px solid var(--line);
+  background: var(--bg-input);
+  transition: all 120ms ease;
+}
+
+.panel-toggle:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+/* Clickable / selected rows in the rules table. */
+.rules-table tbody tr.row--clickable {
+  cursor: pointer;
+}
+
+.rules-table tbody tr.row--selected td {
+  background: var(--bg-raised);
+  box-shadow: inset 2px 0 0 var(--accent);   /* thin amber accent bar at the left */
+}
+
+.rules-table tbody tr.row--selected:hover td {
+  background: var(--bg-raised);
+}
+
+/* -------- the panel itself -------- */
+
+.rules-panel {
+  width: 320px;
+  flex-shrink: 0;
+  border-left: 1px solid var(--line);
+  background: var(--bg);
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.asset-box {
+  padding: 14px 16px 16px 16px;
+  border-bottom: 1px solid var(--line);
+}
+
+.asset-box-title {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  color: var(--ink-muted);
+  margin-bottom: 10px;
+}
+
+.asset-box-hint {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--ink-dim);
+  font-style: italic;
+}
+
+.asset-box-empty {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--ink-dim);
+  letter-spacing: 0.02em;
+}
+
+.asset-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.asset-pill {
+  display: block;
+  width: 100%;
+  text-align: left;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  padding: 6px 10px;
+  background: var(--bg-input);
+  color: var(--ink);
+  border: 1px solid var(--line);
+  transition: all 100ms ease;
+}
+
+.asset-pill:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.asset-pill--selected {
+  background: var(--accent);
+  color: var(--accent-ink);
+  border-color: var(--accent);
+}
+
+.asset-pill--selected:hover {
+  /* selected + hover should still look selected, not revert */
+  color: var(--accent-ink);
+  background: var(--accent);
+}
+
+/* -------- asset details -------- */
+
+.asset-details {
+  padding: 14px 16px 20px 16px;
+  background: var(--bg-raised);
+  border-top: 1px solid var(--line-strong);
+}
+
+.asset-details-title {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.asset-details-label {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  color: var(--ink-muted);
+}
+
+.asset-details-name {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--ink);
+}
+
+.asset-details-list {
+  margin: 0;
+  display: grid;
+  grid-template-columns: 50px 1fr;
+  row-gap: 10px;
+  column-gap: 12px;
+  align-items: baseline;
+}
+
+.asset-details-list dt {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--ink-dim);
+}
+
+.asset-details-list dd {
+  margin: 0;
+  min-width: 0;
+}
+
+.asset-ip-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.asset-eid {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--ink-muted);
+  letter-spacing: 0.02em;
+  word-break: break-all;
+}
+
+.asset-empty {
+  font-family: var(--font-mono);
+  color: var(--ink-dim);
 }

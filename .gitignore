@@ -62,3 +62,6 @@ parser.tab.c
 parser.tab.h
 lex.yy.c
 .venv/*
+web/node_modules/
+web/package-lock.json
+web/.vite

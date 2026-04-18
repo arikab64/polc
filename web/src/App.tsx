@@ -2,7 +2,6 @@ import { useState } from 'react'
 import { LoadButton } from './components/LoadButton'
 import { useSqliteDb, type DbState } from './lib/useSqliteDb'
 import { compactNum } from './lib/format'
-import type { LoadedDb } from './lib/types'
 import { InventoryTab } from './tabs/InventoryTab'
 import { CompiledTab } from './tabs/CompiledTab'
 import { RulesTab } from './tabs/RulesTab'
@@ -22,7 +21,25 @@ export function App() {
           <span className="brand-mark">polc</span>
           <span className="brand-sub">policy compiler / inspector</span>
         </div>
-        {db && <LoadButton onLoad={loadFile} label="Reload ..." />}
+        {db && (
+          <>
+            <div className="statusline statusline--inline">
+              <span className="statusline-item">
+                <span className="statusline-key">rules:</span>
+                <span className="statusline-value">{db.stats.rules}</span>
+              </span>
+              <span className="statusline-item">
+                <span className="statusline-key">inventory:</span>
+                <span className="statusline-value">{db.stats.inventory}</span>
+              </span>
+              <span className="statusline-item">
+                <span className="statusline-key">bin=</span>
+                <span className="statusline-value">{db.filename}</span>
+              </span>
+            </div>
+            <LoadButton onLoad={loadFile} label="Reload ..." />
+          </>
+        )}
       </header>
 
       <nav className="tabs" role="tablist">
@@ -38,49 +55,25 @@ export function App() {
         <button
           role="tab"
           className="tab"
-          aria-selected={activeTab === 'compiled'}
-          onClick={() => setActiveTab('compiled')}
-        >
-          Compiled
-        </button>
-        <button
-          role="tab"
-          className="tab"
           aria-selected={activeTab === 'rules'}
           onClick={() => setActiveTab('rules')}
         >
           Rules
           {db && <span className="tab-count">{compactNum(db.stats.rules)}</span>}
         </button>
+        <button
+          role="tab"
+          className="tab"
+          aria-selected={activeTab === 'compiled'}
+          onClick={() => setActiveTab('compiled')}
+        >
+          Compiled
+        </button>
       </nav>
-
-      {db && <StatusLine db={db} />}
 
       <main className="main">
         <Body state={state} activeTab={activeTab} onLoad={loadFile} />
       </main>
-    </div>
-  )
-}
-
-/* ---------------- */
-
-function StatusLine({ db }: { db: LoadedDb }) {
-  return (
-    <div className="statusline">
-      <span className="statusline-item">
-        <span className="statusline-key">rules:</span>
-        <span className="statusline-value">{db.stats.rules}</span>
-      </span>
-      <span className="statusline-item">
-        <span className="statusline-key">inventory:</span>
-        <span className="statusline-value">{db.stats.inventory}</span>
-      </span>
-      <span className="statusline-item">
-        <span className="statusline-key">bin=</span>
-        <span className="statusline-value">{db.filename}</span>
-      </span>
-      <span className="statusline-spacer" />
     </div>
   )
 }
