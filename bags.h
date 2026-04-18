@@ -1,17 +1,28 @@
 /*
- * bags.h — the four enforcement bags (phase 3b).
+ * bags.h — four enforcement bags (phase 3b), with bitvec interning.
  *
- * A "bag" maps a key to a 4096-bit bitvector where bit i means "rule i
- * is relevant to this key." The four bags:
+ * Each bag maps a key to a bag_id, which references a uniqued bitvector
+ * in the global bagvec store. Identical bitvectors across bags share one
+ * id, so storage grows with DISTINCT bitvec content, not with key count.
  *
- *   src_bag   — EID   → bitvec of rules whose src selector matches
- *   dst_bag   — EID   → bitvec of rules whose dst selector matches
- *   port_bag  — port  → bitvec of rules that list this port
- *   proto_bag — proto → bitvec of rules that list this proto (just TCP/UDP)
+ * The four bags and their key types:
+ *   g_bag_src   : EID.hash → bag_id
+ *   g_bag_dst   : EID.hash → bag_id
+ *   g_bag_port  : port     → bag_id
+ *   g_bag_proto : proto    → bag_id     (only TCP and UDP)
  *
- * A packet is allowed iff, at runtime:
- *   src_bag[src_eid] & dst_bag[dst_eid] & port_bag[dport] & proto_bag[proto]
- * is nonzero. (Compile-time we just build; runtime is eBPF's job.)
+ * A packet is allowed iff:
+ *   bagvec[g_bag_src[src_eid]] &
+ *   bagvec[g_bag_dst[dst_eid]] &
+ *   bagvec[g_bag_port[dport]]  &
+ *   bagvec[g_bag_proto[proto]]
+ * is nonzero. Compile time builds the structures; runtime (eBPF) evaluates.
+ *
+ * Two bag_ids are reserved:
+ *   BAG_ID_ZERO = 0  — the all-zero bitvec. Returned when a key isn't in
+ *                      a bag, so the simulator never branches on "missing key".
+ *   BAG_ID_ALL  = 1  — the all-ones bitvec. Reserved for future wildcard
+ *                      semantics; not populated from today's compile path.
  */
 #ifndef BAGS_H
 #define BAGS_H
@@ -20,21 +31,35 @@
 #include <stddef.h>
 #include "ast.h"   /* MAX_RULES */
 
-/* One bitvector = 4096 bits = 64 words of 64 bits each. */
+/* One bitvector = MAX_RULES bits = 64 words of 64 bits each (MAX_RULES=4096). */
 #define RULE_BITVEC_WORDS   (MAX_RULES / 64)
 
 typedef struct {
     uint64_t w[RULE_BITVEC_WORDS];
 } rule_bitvec;
 
-/* Public build + dump + free. */
-void    build_bags(void);
-void    print_bags(void);
-void    free_bags(void);
+/* Interned bag identifier. 32 bits is plenty — any realistic policy has
+ * well under 4 billion distinct bitvectors. */
+typedef uint32_t bag_id_t;
 
-/* Accessors for the phase 4 enforcer (runtime simulation). */
-int     src_bag_get (uint64_t eid,  rule_bitvec *out);
-int     dst_bag_get (uint64_t eid,  rule_bitvec *out);
-int     port_bag_get(int      port, rule_bitvec *out);
+#define BAG_ID_ZERO            0u
+#define BAG_ID_ALL             1u
+#define BAG_ID_FIRST_DYNAMIC   2u
+
+/* Public build + dump + free. */
+void        build_bags(void);
+void        print_bags(void);
+void        free_bags(void);
+
+/* Look up the bitvec content for a bag_id. Returns NULL if id is out of
+ * range (which should never happen for ids returned by the map getters). */
+const rule_bitvec *bagvec_get(bag_id_t id);
+
+/* Four map getters. Missing keys return BAG_ID_ZERO — the simulator can
+ * just AND the returned bitvec unconditionally, no miss/hit branch needed. */
+bag_id_t    bag_src_id  (uint64_t eid);
+bag_id_t    bag_dst_id  (uint64_t eid);
+bag_id_t    bag_port_id (int      port);
+bag_id_t    bag_proto_id(int      proto);   /* PROTO_TCP / PROTO_UDP */
 
 #endif
