@@ -1,8 +1,9 @@
 import { useState } from 'react'
 import type { LoadedDb } from '../lib/types'
 import { EnforcementIdentitiesTab } from './compiled/EnforcementIdentitiesTab'
+import { EndpointTab } from './compiled/EndpointTab'
 
-type InnerTabId = 'eids' | 'bags'
+type InnerTabId = 'eids' | 'endpoint' | 'bags'
 
 interface CompiledTabProps {
   db: LoadedDb
@@ -14,9 +15,7 @@ interface CompiledTabProps {
  * The "Compiled" section groups all views onto the post-parse, post-resolve
  * internal state of the compiler — primarily things a simulator or engine
  * engineer would want to inspect. It has its own set of inner tabs because
- * the space covers several distinct concepts (EIDs, bag vectors, ipcache).
- *
- * Currently only the Enforcement Identities inner tab is implemented.
+ * the space covers several distinct concepts (EIDs, ipcache, bag vectors).
  */
 export function CompiledTab({ db }: CompiledTabProps) {
   const [inner, setInner] = useState<InnerTabId>('eids')
@@ -35,6 +34,14 @@ export function CompiledTab({ db }: CompiledTabProps) {
         <button
           role="tab"
           className="inner-tab"
+          aria-selected={inner === 'endpoint'}
+          onClick={() => setInner('endpoint')}
+        >
+          Endpoint
+        </button>
+        <button
+          role="tab"
+          className="inner-tab"
           aria-selected={inner === 'bags'}
           onClick={() => setInner('bags')}
         >
@@ -43,6 +50,7 @@ export function CompiledTab({ db }: CompiledTabProps) {
       </nav>
       <div className="compiled-body">
         {inner === 'eids' && <EnforcementIdentitiesTab db={db} />}
+        {inner === 'endpoint' && <EndpointTab db={db} />}
         {inner === 'bags' && <BagsStub />}
       </div>
     </div>

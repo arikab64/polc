@@ -1050,3 +1050,36 @@ input[type="search"]:focus {
   color: #a43420;
   letter-spacing: 0.02em;
 }
+
+/* =========================================================
+ * Sortable column headers (currently Endpoint tab)
+ * ========================================================= */
+
+.th-sortable {
+  cursor: pointer;
+  user-select: none;
+  transition: color 120ms ease;
+}
+
+.th-sortable:hover {
+  color: var(--ink);
+}
+
+.th-sortable--active {
+  color: var(--ink);
+}
+
+.th-sort-glyph {
+  display: inline-block;
+  width: 1em;
+  margin-right: 6px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--ink-dim);
+  letter-spacing: 0;
+}
+
+.th-sortable--active .th-sort-glyph {
+  color: var(--accent);
+  font-weight: 600;
+}
