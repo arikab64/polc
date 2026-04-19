@@ -50,9 +50,15 @@ export function CompiledTab({ db }: CompiledTabProps) {
         </button>
       </nav>
       <div className="compiled-body">
-        {inner === 'eids' && <EnforcementIdentitiesTab db={db} />}
-        {inner === 'endpoint' && <EndpointTab db={db} />}
-        {inner === 'bags' && <BagVectorTab db={db} />}
+        <div className="tab-pane" hidden={inner !== 'eids'} aria-hidden={inner !== 'eids'}>
+          <EnforcementIdentitiesTab db={db} />
+        </div>
+        <div className="tab-pane" hidden={inner !== 'endpoint'} aria-hidden={inner !== 'endpoint'}>
+          <EndpointTab db={db} />
+        </div>
+        <div className="tab-pane" hidden={inner !== 'bags'} aria-hidden={inner !== 'bags'}>
+          <BagVectorTab db={db} />
+        </div>
       </div>
     </div>
   )

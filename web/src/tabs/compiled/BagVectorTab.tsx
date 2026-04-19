@@ -92,6 +92,18 @@ export function BagVectorTab({ db }: Props) {
         <span className="bagvec-count">
           {currentEntries.length} {currentEntries.length === 1 ? 'entry' : 'entries'}
         </span>
+        <button
+          type="button"
+          className="inline-clear"
+          onClick={() => {
+            setSelectedKey(null)
+            setKeyFilter([])
+          }}
+          disabled={selectedKey === null && keyFilter.length === 0}
+          title="Clear selection and filter"
+        >
+          Clear
+        </button>
       </header>
 
       {/* ===== TOP: bag vector table ===== */}

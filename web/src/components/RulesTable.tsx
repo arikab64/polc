@@ -16,6 +16,20 @@ import { ColumnFilter } from './ColumnFilter'
 import { RuleSelector } from './RuleSelector'
 import { ResolvedIcon } from './ResolvedIcon'
 
+/** Column IDs that RulesTable knows how to render. */
+export type RulesTableColumnId =
+  | 'action'
+  | 'src'
+  | 'dst'
+  | 'ports'
+  | 'protos'
+  | 'id'
+  | 'resolved'
+
+const ALL_COLUMNS: RulesTableColumnId[] = [
+  'action', 'src', 'dst', 'ports', 'protos', 'id', 'resolved',
+]
+
 interface RulesTableProps {
   rules: Rule[]
   /** Optional row click handler. When provided, rows gain hover state and
@@ -24,6 +38,8 @@ interface RulesTableProps {
   onRowClick?: (rule: Rule) => void
   /** Optional highlighted row for caller-managed selection. */
   selectedRuleId?: number | null
+  /** Subset of columns to show and in what order. Defaults to all seven. */
+  visibleColumns?: RulesTableColumnId[]
   /** Message to show when the current filter set yields zero rows. */
   emptyMessage?: string
   /** Message to show when the input rules list itself is empty (before any
@@ -54,6 +70,30 @@ const resolvedFilter: FilterFn<Rule> = (row, _columnId, filterValue) => {
   if (!selected || selected.length === 0) return true
   const key = row.original.resolved ? 'resolved' : 'unresolved'
   return selected.includes(key)
+}
+
+/** Filter a selector side (src or dst) by label strings. A rule passes
+ *  if any of its DNF terms on that side contains any of the selected
+ *  `key:value` labels. Standard "does this rule mention app:web-front?"
+ *  semantics. */
+const selectorLabelFilter: FilterFn<Rule> = (row, columnId, filterValue) => {
+  const selected = filterValue as string[] | undefined
+  if (!selected || selected.length === 0) return true
+  const terms = row.getValue(columnId) as Rule['src']
+  for (const term of terms) {
+    for (const lbl of term.labels) {
+      if (selected.includes(`${lbl.key}:${lbl.value}`)) return true
+    }
+  }
+  return false
+}
+
+/** Filter rule IDs as strings — TanStack compares IDs as numbers by
+ *  default, so we coerce here to match the popover's string options. */
+const ruleIdFilter: FilterFn<Rule> = (row, columnId, filterValue) => {
+  const selected = filterValue as string[] | undefined
+  if (!selected || selected.length === 0) return true
+  return selected.includes(String(row.getValue(columnId)))
 }
 
 /* -------------------- sort comparators -------------------- */
@@ -93,6 +133,7 @@ export function RulesTable({
   rules,
   onRowClick,
   selectedRuleId,
+  visibleColumns = ALL_COLUMNS,
   emptyMessage = 'no rules match the active filters',
   nothingToShowMessage,
 }: RulesTableProps) {
@@ -105,20 +146,40 @@ export function RulesTable({
     const actions = new Set<string>()
     const ports = new Set<number>()
     const protos = new Set<string>()
+    const ruleIds = new Set<number>()
+    const srcLabels = new Set<string>()
+    const dstLabels = new Set<string>()
     for (const r of rules) {
       actions.add(r.action)
+      ruleIds.add(r.id)
       for (const p of r.ports) ports.add(p)
       for (const p of r.protos) protos.add(p)
+      for (const term of r.src)
+        for (const l of term.labels) srcLabels.add(`${l.key}:${l.value}`)
+      for (const term of r.dst)
+        for (const l of term.labels) dstLabels.add(`${l.key}:${l.value}`)
     }
     return {
       actions: [...actions].sort(),
       ports: [...ports].sort((a, b) => a - b),
       protos: [...protos].sort(),
+      ruleIds: [...ruleIds].sort((a, b) => a - b).map(String),
+      srcLabels: [...srcLabels].sort(),
+      dstLabels: [...dstLabels].sort(),
     }
   }, [rules])
 
   const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([])
   const [sorting, setSorting] = useState<SortingState>([])
+
+  // Derive visibility + order from visibleColumns prop. visibility hides
+  // cells; order controls the left-to-right column sequence.
+  const columnVisibility = useMemo(() => {
+    const visSet = new Set(visibleColumns)
+    const vis: Record<string, boolean> = {}
+    for (const id of ALL_COLUMNS) vis[id] = visSet.has(id)
+    return vis
+  }, [visibleColumns])
 
   const columns = useMemo(
     () => [
@@ -134,14 +195,14 @@ export function RulesTable({
       columnHelper.accessor('src', {
         id: 'src',
         header: 'Src',
-        enableColumnFilter: false,
+        filterFn: selectorLabelFilter,
         sortingFn: sortBySelectorString,
         cell: (info) => <RuleSelector terms={info.getValue()} />,
       }),
       columnHelper.accessor('dst', {
         id: 'dst',
         header: 'Dst',
-        enableColumnFilter: false,
+        filterFn: selectorLabelFilter,
         sortingFn: sortBySelectorString,
         cell: (info) => <RuleSelector terms={info.getValue()} />,
       }),
@@ -174,7 +235,7 @@ export function RulesTable({
       columnHelper.accessor('id', {
         id: 'id',
         header: 'RuleID',
-        enableColumnFilter: false,
+        filterFn: ruleIdFilter,
         cell: (info) => <span className="col-rule-id">{info.getValue()}</span>,
       }),
       columnHelper.accessor((r) => (r.resolved ? 'resolved' : 'unresolved'), {
@@ -190,7 +251,7 @@ export function RulesTable({
   const table = useReactTable({
     data: rules,
     columns,
-    state: { columnFilters, sorting },
+    state: { columnFilters, sorting, columnVisibility, columnOrder: visibleColumns },
     onColumnFiltersChange: setColumnFilters,
     onSortingChange: setSorting,
     getCoreRowModel: getCoreRowModel(),
@@ -213,63 +274,106 @@ export function RulesTable({
     return <div className="rules-table-empty">{nothingToShowMessage}</div>
   }
 
+  const renderHeader = (id: RulesTableColumnId) => {
+    switch (id) {
+      case 'action':
+        return (
+          <SortableTh key="action" table={table} columnId="action">
+            Action
+            <ColumnFilter
+              options={filterOptions.actions}
+              selected={selectedFor('action')}
+              onChange={(next) => updateFilter('action', next)}
+              placeholder="search..."
+            />
+          </SortableTh>
+        )
+      case 'src':
+        return (
+          <SortableTh key="src" table={table} columnId="src">
+            Src
+            <ColumnFilter
+              options={filterOptions.srcLabels}
+              selected={selectedFor('src')}
+              onChange={(next) => updateFilter('src', next)}
+              placeholder="search labels..."
+            />
+          </SortableTh>
+        )
+      case 'dst':
+        return (
+          <SortableTh key="dst" table={table} columnId="dst">
+            Dst
+            <ColumnFilter
+              options={filterOptions.dstLabels}
+              selected={selectedFor('dst')}
+              onChange={(next) => updateFilter('dst', next)}
+              placeholder="search labels..."
+            />
+          </SortableTh>
+        )
+      case 'ports':
+        return (
+          <SortableTh key="ports" table={table} columnId="ports">
+            Ports
+            <ColumnFilter
+              options={filterOptions.ports.map(String)}
+              selected={selectedFor('ports')}
+              onChange={(next) => updateFilter('ports', next)}
+              placeholder="search ports..."
+            />
+          </SortableTh>
+        )
+      case 'protos':
+        return (
+          <th key="protos">
+            Protocol
+            <ColumnFilter
+              options={filterOptions.protos}
+              selected={selectedFor('protos')}
+              onChange={(next) => updateFilter('protos', next)}
+              placeholder="search..."
+            />
+          </th>
+        )
+      case 'id':
+        return (
+          <SortableTh key="id" table={table} columnId="id" className="th-rule-id">
+            RuleID
+            <ColumnFilter
+              options={filterOptions.ruleIds}
+              selected={selectedFor('id')}
+              onChange={(next) => updateFilter('id', next)}
+              placeholder="search id..."
+            />
+          </SortableTh>
+        )
+      case 'resolved':
+        return (
+          <th key="resolved" className="th-resolved">
+            Resolved
+            <ColumnFilter
+              options={['resolved', 'unresolved']}
+              selected={selectedFor('resolved')}
+              onChange={(next) => updateFilter('resolved', next)}
+              renderOption={(v) => (
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                  <ResolvedIcon resolved={v === 'resolved'} />
+                  {v}
+                </span>
+              )}
+              placeholder="search..."
+            />
+          </th>
+        )
+    }
+  }
+
   return (
     <div className="inv-table-wrap">
       <table className="inv-table rules-table sortable-table">
         <thead>
-          <tr>
-            <SortableTh table={table} columnId="action">
-              Action
-              <ColumnFilter
-                options={filterOptions.actions}
-                selected={selectedFor('action')}
-                onChange={(next) => updateFilter('action', next)}
-                placeholder="search..."
-              />
-            </SortableTh>
-            <SortableTh table={table} columnId="src">
-              Src
-            </SortableTh>
-            <SortableTh table={table} columnId="dst">
-              Dst
-            </SortableTh>
-            <SortableTh table={table} columnId="ports">
-              Ports
-              <ColumnFilter
-                options={filterOptions.ports.map(String)}
-                selected={selectedFor('ports')}
-                onChange={(next) => updateFilter('ports', next)}
-                placeholder="search ports..."
-              />
-            </SortableTh>
-            <th>
-              Protocol
-              <ColumnFilter
-                options={filterOptions.protos}
-                selected={selectedFor('protos')}
-                onChange={(next) => updateFilter('protos', next)}
-                placeholder="search..."
-              />
-            </th>
-            <SortableTh table={table} columnId="id" className="th-rule-id">
-              RuleID
-            </SortableTh>
-            <th className="th-resolved">
-              Resolved
-              <ColumnFilter
-                options={['resolved', 'unresolved']}
-                selected={selectedFor('resolved')}
-                onChange={(next) => updateFilter('resolved', next)}
-                renderOption={(v) => (
-                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-                    <ResolvedIcon resolved={v === 'resolved'} />
-                    {v}
-                  </span>
-                )}
-                placeholder="search..."
-              />
-            </th>
-          </tr>
+          <tr>{visibleColumns.map((id) => renderHeader(id))}</tr>
         </thead>
         <tbody>
           {table.getRowModel().rows.map((row) => {
@@ -299,7 +403,7 @@ export function RulesTable({
           {table.getRowModel().rows.length === 0 && (
             <tr>
               <td
-                colSpan={7}
+                colSpan={visibleColumns.length}
                 style={{ textAlign: 'center', padding: '40px', color: 'var(--ink-dim)' }}
               >
                 {emptyMessage}

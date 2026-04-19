@@ -1,4 +1,4 @@
-import { memo, useEffect, useMemo, useRef, useState } from 'react'
+import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 
 interface ColumnFilterProps {
   /** all available options for this column (the distinct set) */
@@ -24,6 +24,12 @@ interface ColumnFilterProps {
  *   - "clear" in footer resets; "all (shown)" selects the currently visible
  *   - outside click / Escape closes
  *
+ * Positioning: the popover uses `position: fixed` so it escapes any
+ * overflow-hidden / scrollable ancestor (table-wrap, debug-panel, etc).
+ * We measure the trigger's bounding rect on open and pick an origin that
+ * keeps the popover on-screen horizontally — right-edge columns flip to
+ * right-anchored, near-bottom columns flip to drop-up.
+ *
  * Implementation note: the clickable row contains a native checkbox.
  * We wire `onClick` ONLY on the row and stop propagation from the
  * checkbox itself — if we also wire the checkbox's onChange to the
@@ -39,15 +45,59 @@ function ColumnFilterImpl({
 }: ColumnFilterProps) {
   const [open, setOpen] = useState(false)
   const [search, setSearch] = useState('')
+  const [pos, setPos] = useState<{
+    top: number
+    left?: number
+    right?: number
+  } | null>(null)
   const wrapRef = useRef<HTMLSpanElement>(null)
+  const popRef = useRef<HTMLDivElement>(null)
+
+  // Measure trigger + decide popover position. Runs on open and on any
+  // scroll/resize while open, so the popover stays glued to the trigger
+  // if the user scrolls the table under it.
+  useLayoutEffect(() => {
+    if (!open || !wrapRef.current) return
+
+    const reposition = () => {
+      const trig = wrapRef.current
+      if (!trig) return
+      const rect = trig.getBoundingClientRect()
+      const vw = window.innerWidth
+      const POPOVER_WIDTH = 280 // matches the CSS min-width; conservative
+      const MARGIN = 8
+      const top = rect.bottom + 6
+
+      // If the natural left would push the popover past the viewport's
+      // right edge, right-align it against the trigger's right edge
+      // instead. Use fixed coordinates: left=rect.left / right=vw-rect.right.
+      if (rect.left + POPOVER_WIDTH + MARGIN > vw) {
+        setPos({ top, right: Math.max(MARGIN, vw - rect.right) })
+      } else {
+        setPos({ top, left: Math.max(MARGIN, rect.left) })
+      }
+    }
+
+    reposition()
+    // Re-run on scroll (any ancestor) and resize. `true` on addEventListener
+    // catches scroll events from nested scrollers via capture phase.
+    window.addEventListener('scroll', reposition, true)
+    window.addEventListener('resize', reposition)
+    return () => {
+      window.removeEventListener('scroll', reposition, true)
+      window.removeEventListener('resize', reposition)
+    }
+  }, [open])
 
   // close on outside click / Escape
   useEffect(() => {
     if (!open) return
     const onDocClick = (e: MouseEvent) => {
-      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) {
-        setOpen(false)
-      }
+      const t = e.target as Node
+      // Click was inside the trigger OR the popover — ignore.
+      if (wrapRef.current && wrapRef.current.contains(t)) return
+      if (popRef.current && popRef.current.contains(t)) return
+      setOpen(false)
     }
     const onEsc = (e: KeyboardEvent) => {
       if (e.key === 'Escape') setOpen(false)
@@ -92,8 +142,16 @@ function ColumnFilterImpl({
       >
         {active ? `● ${selected.length}` : '⌄'}
       </button>
-      {open && (
-        <div className="col-filter-popover" onClick={(e) => e.stopPropagation()}>
+      {open && pos && (
+        <div
+          ref={popRef}
+          className="col-filter-popover"
+          onClick={(e) => e.stopPropagation()}
+          style={{
+            top: pos.top,
+            ...(pos.left != null ? { left: pos.left } : { right: pos.right }),
+          }}
+        >
           <input
             type="search"
             placeholder={placeholder}

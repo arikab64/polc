@@ -343,6 +343,23 @@ input[type="search"]:focus {
   min-height: 0;
 }
 
+/* Each mounted tab pane fills the main area when shown. The [hidden]
+ * attribute ships display:none from the browser, which removes the pane
+ * from the flex layout entirely — so the currently-active pane gets the
+ * full flex:1 and the rest are out of flow. This lets us keep all tabs
+ * mounted without them fighting over the flex space. */
+.tab-pane {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.tab-pane[hidden] {
+  display: none;
+}
+
 /* ===== inventory table ===== */
 
 .inv-table-wrap {
@@ -492,15 +509,16 @@ input[type="search"]:focus {
 }
 
 .col-filter-popover {
-  position: absolute;
-  top: calc(100% + 6px);
-  left: 0;
-  z-index: 100;
+  /* Fixed so it escapes overflow-clipping ancestors. JS computes top/
+   * left/right inline based on the trigger's viewport rect. */
+  position: fixed;
+  z-index: 1000;
   min-width: 240px;
   max-width: 320px;
   background: var(--bg-raised);
   border: 1px solid var(--line-strong);
   padding: 10px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.08);
 }
 
 .col-filter-popover input[type="search"] {
@@ -1153,6 +1171,14 @@ input[type="search"]:focus {
   margin-left: auto;
 }
 
+/* In the bagvec toolbar, the Clear button lives on the far right with
+ * the entry count just before it. The count pushes itself (and the
+ * Clear that follows) via margin-left:auto above; we just need to make
+ * sure Clear doesn't fight for that margin. */
+.bagvec-toolbar .inline-clear {
+  margin-left: 0;
+}
+
 /* ---- top half: table ---- */
 
 .bagvec-top {
@@ -1385,4 +1411,771 @@ input[type="search"]:focus {
   background: var(--bg);
   flex: 1 1 auto;
   min-height: 0;
+}
+
+/* =========================================================
+ * Simulator tab
+ * ========================================================= */
+
+.sim-tab {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.sim-section-title {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  color: var(--ink-muted);
+  font-weight: 500;
+  margin: 0 0 12px 0;
+  display: block;
+}
+
+/* ---- input form ---- */
+
+.sim-input {
+  padding: 18px 24px 16px 24px;
+  border-bottom: 1px solid var(--line);
+  background: var(--bg-raised);
+  flex-shrink: 0;
+}
+
+/* Packet inputs: one horizontal row on wide viewports, wraps onto
+ * additional lines on narrower ones. Each field has a flex-basis
+ * tuned to its natural content: the two IP fields are flexible (grow
+ * to fill remaining space), port is compact, protocol's radio group
+ * is narrow and auto-sized. */
+.sim-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px 20px;
+  align-items: flex-end;
+  max-width: 1100px;
+}
+
+.sim-grid .sim-field {
+  flex: 1 1 200px;   /* IP fields share remaining space equally */
+  min-width: 160px;
+}
+
+/* The port field doesn't need much room — keep it small so IPs stay wide. */
+.sim-grid .sim-field--port {
+  flex: 0 0 96px;
+  min-width: 96px;
+}
+
+/* Protocol holds two radio labels; size to content plus a little breathing room. */
+.sim-grid .sim-field--proto {
+  flex: 0 0 auto;
+  min-width: 140px;
+}
+
+.sim-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.sim-field-label {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--ink-dim);
+}
+
+.sim-text-input {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  color: var(--ink);
+  background: var(--bg-input);
+  border: 1px solid var(--line-strong);
+  padding: 6px 10px;
+  width: 100%;
+  letter-spacing: 0.01em;
+}
+
+.sim-text-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.sim-input-with-button {
+  display: flex;
+  align-items: stretch;
+  gap: 0;
+}
+
+.sim-input-with-button .sim-text-input {
+  border-right: none;
+}
+
+.sim-picker-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 10px;
+  background: var(--bg-input);
+  color: var(--ink-muted);
+  border: 1px solid var(--line-strong);
+  cursor: pointer;
+  transition: color 120ms ease, background 120ms ease;
+  flex-shrink: 0;
+}
+
+.sim-picker-btn:hover {
+  color: var(--accent);
+  background: var(--bg);
+}
+
+.sim-radio-group {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+  height: 30px;   /* match the text input's height for alignment */
+}
+
+.sim-radio {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--ink);
+  cursor: pointer;
+}
+
+.sim-radio input {
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+/* Actions field — lives on the same row as the inputs, pushed to the
+ * far right. Uses margin-left:auto so it naturally flows after the
+ * Protocol field but claims all remaining horizontal space. */
+.sim-field--actions {
+  flex: 0 0 auto;
+  margin-left: auto;
+}
+
+.sim-actions-inline {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 30px;   /* match the input height so buttons sit in line */
+}
+
+.sim-form-error {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: #a43420;
+  letter-spacing: 0.02em;
+  margin-top: 10px;
+}
+
+.sim-send {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  padding: 8px 28px;
+  background: var(--accent);
+  color: var(--accent-ink);
+  border: 1px solid var(--accent);
+  cursor: pointer;
+  transition: filter 120ms ease;
+}
+
+.sim-send:hover {
+  filter: brightness(1.08);
+}
+
+.sim-clear {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 8px 18px;
+  background: transparent;
+  color: var(--ink-muted);
+  border: 1px solid var(--line-strong);
+  cursor: pointer;
+  transition: color 120ms ease, border-color 120ms ease;
+}
+
+.sim-clear:hover {
+  color: var(--ink);
+  border-color: var(--ink-muted);
+}
+
+/* =========================================================
+ * Shared: tiny "Clear" affordance used in asset-box titles
+ * and toolbars where state accumulates.
+ * ========================================================= */
+
+.inline-clear {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 3px 10px;
+  background: transparent;
+  color: var(--ink-muted);
+  border: 1px solid var(--line-strong);
+  cursor: pointer;
+  transition: color 120ms ease, border-color 120ms ease, opacity 120ms ease;
+}
+
+.inline-clear:hover:not(:disabled) {
+  color: var(--ink);
+  border-color: var(--ink-muted);
+}
+
+.inline-clear:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+/* title row that holds an action on the right */
+.asset-box-title--with-action {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+/* ---- verdict panel ---- */
+
+.sim-verdict {
+  padding: 10px 24px;
+  background: var(--bg);
+  border-bottom: 1px solid var(--line);
+  flex-shrink: 0;
+}
+
+.sim-verdict-idle {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--ink-dim);
+  text-align: center;
+  padding: 16px;
+  letter-spacing: 0.04em;
+}
+
+.sim-verdict-box {
+  display: flex;
+  align-items: baseline;
+  gap: 16px;
+  padding: 10px 20px;
+  border: 1.5px solid;
+  max-width: 1100px;
+  /* the reason text can be long — allow it to take remaining space and
+   * truncate with ellipsis before forcing a wrap */
+  min-width: 0;
+}
+
+.sim-verdict-label {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.16em;
+  flex-shrink: 0;
+}
+
+.sim-verdict-value {
+  font-family: var(--font-mono);
+  font-size: 26px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  flex-shrink: 0;
+}
+
+.sim-verdict-reason {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--ink-muted);
+  letter-spacing: 0.02em;
+  /* take remaining space; truncate rather than wrap so the row stays one line */
+  flex: 1 1 0;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sim-verdict-box--allow {
+  background: #ecf6ea;
+  border-color: #7aae6c;
+}
+
+.sim-verdict-box--allow .sim-verdict-label,
+.sim-verdict-box--allow .sim-verdict-value {
+  color: #2b6b1e;
+}
+
+.sim-verdict-box--deny {
+  background: #fbece8;
+  border-color: #c06550;
+}
+
+.sim-verdict-box--deny .sim-verdict-label,
+.sim-verdict-box--deny .sim-verdict-value {
+  color: #9e2a14;
+}
+
+/* ---- debug panel ---- */
+
+.sim-debug {
+  padding: 18px 24px 28px 24px;
+  background: var(--bg);
+  /* Fixed size: take the remaining vertical space below the form +
+   * verdict (which are flex-shrink:0). Internal scroll handles
+   * overflow — the sim-tab itself stays flush with its container. */
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.sim-debug-subsection {
+  margin-bottom: 20px;
+}
+
+.sim-debug-sub-title {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  color: var(--ink);
+  font-weight: 500;
+  margin: 0 0 8px 0;
+  padding-bottom: 6px;
+  border-bottom: 1px dashed var(--line);
+}
+
+.sim-endpoint-table,
+.sim-bag-table {
+  width: auto;
+  max-width: 100%;
+}
+
+.sim-side {
+  display: inline-block;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  padding: 2px 8px;
+  font-weight: 500;
+}
+
+.sim-side--src {
+  background: #e0ebf5;
+  color: #25587b;
+  border: 1px solid #bdd4e8;
+}
+
+.sim-side--dst {
+  background: #f0e6f2;
+  color: #6a3079;
+  border: 1px solid #d7c4dd;
+}
+
+.sim-miss {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--ink-dim);
+  font-style: italic;
+}
+
+.sim-bag-name {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--ink);
+  background: var(--bg-raised);
+  padding: 2px 8px;
+  letter-spacing: 0.02em;
+}
+
+.sim-bag-key {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--ink);
+  display: block;
+}
+
+.sim-bag-key-hint {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--ink-dim);
+  margin-top: 2px;
+  letter-spacing: 0.02em;
+}
+
+.sim-bag-hex {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--ink);
+  letter-spacing: 0.02em;
+}
+
+.sim-bag-miss {
+  color: var(--ink-dim);
+  font-style: italic;
+}
+
+.sim-bag-rules {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--ink-muted);
+}
+
+/* =========================================================
+ * Bag lookups split layout — table on the left, associated
+ * rules grid on the right.
+ * ========================================================= */
+
+.sim-bag-split {
+  display: flex;
+  gap: 20px;
+  align-items: flex-start;
+  /* Wrap to stacked on narrow viewports — the rules grid wants some
+   * breathing room. */
+  flex-wrap: wrap;
+}
+
+.sim-bag-split-left {
+  flex: 1 1 460px;
+  min-width: 0;
+}
+
+.sim-bag-split-right {
+  flex: 2 1 520px;
+  min-width: 0;
+  background: var(--bg-raised);
+  border: 1px solid var(--line);
+  padding: 12px 14px 14px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.sim-bag-split-right-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding-bottom: 8px;
+  border-bottom: 1px dashed var(--line);
+}
+
+.sim-bag-split-right-title {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  color: var(--ink);
+  font-weight: 500;
+}
+
+.sim-bag-split-right-meta {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--ink-dim);
+  letter-spacing: 0.02em;
+}
+
+.sim-bag-split-right-meta code {
+  color: var(--ink);
+  background: var(--bg);
+  padding: 1px 6px;
+  border-radius: 2px;
+}
+
+.sim-bag-split-right-hint {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--ink-dim);
+  padding: 20px 0;
+  text-align: center;
+  letter-spacing: 0.02em;
+}
+
+/* AND calculation panel */
+
+.sim-calc {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 16px;
+  background: var(--bg-raised);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  flex-wrap: wrap;
+  border: 1px solid var(--line);
+}
+
+.sim-calc-line {
+  color: var(--ink);
+  letter-spacing: 0.02em;
+}
+
+.sim-calc-arrow {
+  color: var(--ink-muted);
+  font-size: 16px;
+  font-weight: 500;
+}
+
+.sim-calc-result {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.sim-calc-empty {
+  color: #9e2a14;
+  font-style: italic;
+}
+
+/* Winning rule block */
+
+.sim-winner {
+  background: var(--bg-raised);
+  border: 1px solid var(--accent);
+  padding: 14px 16px;
+  max-width: 900px;
+}
+
+.sim-winner-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+  padding-bottom: 10px;
+  border-bottom: 1px dashed var(--line);
+}
+
+.sim-winner-id {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--ink-dim);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.sim-winner-body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.sim-winner-row {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  font-size: 12px;
+}
+
+.sim-winner-label {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--ink-dim);
+  min-width: 38px;
+  flex-shrink: 0;
+}
+
+/* =========================================================
+ * IP Picker modal
+ * ========================================================= */
+
+.picker-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(20, 16, 12, 0.42);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  padding: 24px;
+}
+
+.picker-modal {
+  background: var(--bg);
+  border: 1px solid var(--line-strong);
+  width: 520px;
+  max-width: calc(100vw - 48px);
+  max-height: calc(100vh - 48px);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  box-shadow: 0 8px 40px rgba(0, 0, 0, 0.12);
+}
+
+.picker-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--line);
+  background: var(--bg-raised);
+}
+
+.picker-modal-title {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  color: var(--ink);
+  font-weight: 500;
+}
+
+.picker-modes {
+  display: flex;
+  gap: 4px;
+  padding: 10px 18px 0 18px;
+  border-bottom: 1px solid var(--line);
+  background: var(--bg-raised);
+}
+
+.picker-mode {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  padding: 5px 12px;
+  margin-bottom: -1px;
+  color: var(--ink-muted);
+  background: transparent;
+  border: 1px solid transparent;
+  border-bottom: none;
+  cursor: pointer;
+}
+
+.picker-mode:hover {
+  color: var(--ink);
+}
+
+.picker-mode[aria-selected="true"] {
+  background: var(--bg);
+  color: var(--ink);
+  border-color: var(--line);
+  border-bottom-color: var(--bg);
+  font-weight: 500;
+}
+
+.picker-search {
+  padding: 12px 18px;
+  border-bottom: 1px solid var(--line);
+}
+
+.picker-search-input {
+  width: 100%;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  padding: 6px 10px;
+  background: var(--bg-input);
+  color: var(--ink);
+  border: 1px solid var(--line-strong);
+}
+
+.picker-search-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.picker-body {
+  flex: 1;
+  overflow-y: auto;
+  min-height: 200px;
+  max-height: 480px;
+  padding: 6px 0;
+}
+
+.picker-empty {
+  text-align: center;
+  padding: 40px 20px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--ink-dim);
+}
+
+.picker-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.picker-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  padding: 8px 18px;
+  background: transparent;
+  color: var(--ink);
+  border: none;
+  border-left: 2px solid transparent;
+  cursor: pointer;
+  text-align: left;
+  transition: background 80ms ease, border-color 80ms ease;
+}
+
+.picker-row:hover:not(:disabled) {
+  background: var(--bg-raised);
+  border-left-color: var(--accent);
+}
+
+.picker-row:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.picker-row-primary {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  color: var(--ink);
+  letter-spacing: 0.02em;
+}
+
+.picker-row-secondary {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--ink-dim);
+  letter-spacing: 0.02em;
+}
+
+.picker-group {
+  list-style: none;
+}
+
+.picker-group-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 18px;
+  background: var(--bg-raised);
+  font-weight: 500;
+  border-top: 1px solid var(--line);
+}
+
+.picker-group:first-child .picker-group-head {
+  border-top: none;
+}
+
+.picker-sublist {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.picker-row--nested {
+  padding-left: 36px;
 }

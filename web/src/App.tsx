@@ -5,8 +5,9 @@ import { compactNum } from './lib/format'
 import { InventoryTab } from './tabs/InventoryTab'
 import { CompiledTab } from './tabs/CompiledTab'
 import { RulesTab } from './tabs/RulesTab'
+import { SimulatorTab } from './tabs/SimulatorTab'
 
-type TabId = 'inventory' | 'compiled' | 'rules'
+type TabId = 'inventory' | 'compiled' | 'rules' | 'simulator'
 
 export function App() {
   const { state, loadFile } = useSqliteDb()
@@ -68,6 +69,14 @@ export function App() {
           onClick={() => setActiveTab('compiled')}
         >
           Compiled
+        </button>
+        <button
+          role="tab"
+          className="tab"
+          aria-selected={activeTab === 'simulator'}
+          onClick={() => setActiveTab('simulator')}
+        >
+          Simulator
         </button>
       </nav>
 
@@ -132,8 +141,36 @@ function Body({
   }
 
   // ready
+  // Keep all tabs mounted so their per-tab state (simulator inputs,
+  // expression text, filters, etc.) survives navigation. Only the active
+  // tab is visible; the rest are hidden via CSS. Mounting cost is
+  // negligible — the data is already in memory, each tab just renders
+  // its own subset once.
   const db = state.db
-  if (activeTab === 'inventory') return <InventoryTab db={db} />
-  if (activeTab === 'compiled') return <CompiledTab db={db} />
-  return <RulesTab db={db} />
+  return (
+    <>
+      <TabPane active={activeTab === 'inventory'}>
+        <InventoryTab db={db} />
+      </TabPane>
+      <TabPane active={activeTab === 'rules'}>
+        <RulesTab db={db} />
+      </TabPane>
+      <TabPane active={activeTab === 'compiled'}>
+        <CompiledTab db={db} />
+      </TabPane>
+      <TabPane active={activeTab === 'simulator'}>
+        <SimulatorTab db={db} />
+      </TabPane>
+    </>
+  )
+}
+
+/** Wrapper that hides its children when `active` is false instead of
+ *  unmounting them. Keeps tab state alive across navigation. */
+function TabPane({ active, children }: { active: boolean; children: React.ReactNode }) {
+  return (
+    <div className="tab-pane" hidden={!active} aria-hidden={!active}>
+      {children}
+    </div>
+  )
 }

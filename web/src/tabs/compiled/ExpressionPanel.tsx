@@ -66,10 +66,26 @@ export function ExpressionPanel({ db }: Props) {
     }
   }, [resolvedAssets, selectedAssetName])
 
+  const handleClear = () => {
+    setText('')
+    setSelectedAssetName(null)
+  }
+
   return (
     <aside className="expression-panel">
       <section className="asset-box">
-        <header className="asset-box-title">Expression</header>
+        <header className="asset-box-title asset-box-title--with-action">
+          <span>Expression</span>
+          <button
+            type="button"
+            className="inline-clear"
+            onClick={handleClear}
+            disabled={text === '' && selectedAssetName === null}
+            title="Clear expression and selection"
+          >
+            Clear
+          </button>
+        </header>
         <textarea
           className="expr-input"
           value={text}
