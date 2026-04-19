@@ -1,0 +1,31 @@
+{
+  "name": "gc-syntax",
+  "displayName": "gc policy DSL",
+  "description": "Syntax highlighting for the gc-enforcement policy DSL (*.gc)",
+  "version": "0.1.0",
+  "publisher": "gc-local",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.60.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "contributes": {
+    "languages": [
+      {
+        "id": "gc",
+        "aliases": ["gc policy", "gc"],
+        "extensions": [".gc"],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "gc",
+        "scopeName": "source.gc",
+        "path": "./syntaxes/gc.tmLanguage.json"
+      }
+    ]
+  }
+}

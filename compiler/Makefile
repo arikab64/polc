@@ -58,5 +58,16 @@ vim-install:
 	@echo "installed gc.vim into $$HOME/.vim/"
 	@echo "open a .gc file and run  :set filetype?  to verify"
 
+
+# Install VSCode syntax highlighting for *.gc files.
+vscode-install:
+	@mkdir -p $$HOME/.vscode/extensions/gc-syntax
+	@mkdir -p $$HOME/.vscode/extensions/gc-syntax/syntaxes
+	cp vscode/gc-syntax/package.json                 $$HOME/.vscode/extensions/gc-syntax/
+	cp vscode/gc-syntax/language-configuration.json  $$HOME/.vscode/extensions/gc-syntax/
+	cp vscode/gc-syntax/syntaxes/gc.tmLanguage.json  $$HOME/.vscode/extensions/gc-syntax/syntaxes/
+	@echo "installed gc-syntax into $$HOME/.vscode/extensions/"
+	@echo "restart VSCode, open a .gc file, and check the language mode in the status bar"
+
 clean:
 	rm -f $(TARGET) $(OBJS) parser.tab.c parser.tab.h lex.yy.c

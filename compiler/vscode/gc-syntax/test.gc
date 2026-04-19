@@ -1,0 +1,15 @@
+# Test file for gc-syntax highlighting
+// Both comment styles should be gray
+
+inventory:
+    web-prod-1 [10.0.1.10 10.0.1.11] => [env:production app:web role:server];
+    api-prod-1 [10.0.2.20]           => [env:production app:api role:server];
+
+vars:
+    $backend = [app:api app:db];
+    @web-ports = [80 443];
+
+policy:
+    ALLOW  env:production AND app:web -> env:production AND app:api  @web-ports TCP;
+    BLOCK  env:staging -> env:production  22 TCP;
+    OVERRIDE-ALLOW role:admin -> $backend  [22 3306] TCP, UDP;
