@@ -12,6 +12,7 @@ import {
   type SortingFn,
 } from '@tanstack/react-table'
 import type { Rule } from '../lib/types'
+import { formatPorts } from '../lib/format'
 import { ColumnFilter } from './ColumnFilter'
 import { RuleSelector } from './RuleSelector'
 import { ResolvedIcon } from './ResolvedIcon'
@@ -212,9 +213,7 @@ export function RulesTable({
         filterFn: multiSelectArray,
         sortingFn: sortByPortsNumeric,
         cell: (info) => (
-          <span className="col-ports">
-            {info.getValue().length === 0 ? '—' : info.getValue().join(', ')}
-          </span>
+          <span className="col-ports">{formatPorts(info.getValue())}</span>
         ),
       }),
       columnHelper.accessor('protos', {

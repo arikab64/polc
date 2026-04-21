@@ -1,26 +1,38 @@
 /*
- * parser.y — grammar for the policy DSL (inventory + policy sections)
+ * parser.y — grammar for the policy DSL (inventory + policy sections).
  *
- * File layout:
- *   file        := section*
- *   section     := 'inventory' ':' entity*
- *                | 'policy'    ':' rule*
+ * RULE SYNTAX (current):
+ *   rule := action selector '->' selector ':' port_spec ':' proto_spec ';'
  *
- * Entity (unchanged):
- *   entity      := NAME '[' ip_list ']' '=>' '[' label_list ']' ';'
- *   label_list  := label (',' label)*
- *   label       := NAME ':' value     // same shape as rule selector leaves
+ * Where:
+ *   port_spec  := ANY
+ *              |  port_item (',' port_item)*
+ *   port_item  := NUMBER
+ *              |  NUMBER '-' NUMBER     // range, expanded at parse time
+ *              |  VAR_PORT               // @var, expanded inline
+ *   proto_spec := ANY
+ *              |  proto (',' proto)*
+ *   proto      := 'TCP' | 'UDP'
  *
- * Rule:
- *   rule        := action selector '->' selector '[' port_list ']' proto_list ';'
- *   action      := 'ALLOW' | 'BLOCK' | 'OVERRIDE-ALLOW' | 'OVERRIDE-BLOCK'
- *   selector    := or_expr
- *   or_expr     := and_expr ('OR'  and_expr)*
- *   and_expr    := primary  ('AND' primary )*
- *   primary     := NAME ':' value | '(' or_expr ')'
- *   port_list   := NUMBER+       (whitespace-separated)
- *   proto_list  := proto (',' proto)*
- *   proto       := 'TCP' | 'UDP'
+ * Both the port and proto sections are mandatory and introduced by ':'.
+ * ANY is a top-level alternative — NOT a member of a list — so syntactically
+ * there's no way to write ":ANY,443" or ":80-ANY". The grammar itself
+ * enforces "ANY stands alone".
+ *
+ * Port 0 is the numeric equivalent of ANY in single-port position, but
+ * illegal in lists and ranges. "ANY in a @var" desugars to port 0 so
+ * the internal representation stays uniform.
+ *
+ * VARIABLE DEFINITIONS:
+ *   @name = NUMBER ;                  // single port
+ *   @name = NUMBER '-' NUMBER ;       // range
+ *   @name = ANY ;                     // wildcard (== 0)
+ *   @name = port_item (',' port_item)* ;    // list
+ *
+ * LABEL VALUES (unchanged semantics):
+ *   value := NAME | IP | ANY         // ANY accepted here too so that
+ *                                    // labels like `app:ANY` keep working
+ *                                    // even though ANY is a keyword.
  */
 %{
 #include <stdio.h>
@@ -32,6 +44,27 @@
 int  yylex(void);
 extern int yylineno;
 void yyerror(const char *msg);
+
+/* ---- parser-local helpers (defined below the grammar) ---------------- */
+
+/* Expand an inclusive range [low..high] into a linked list of port_nodes,
+ * all sharing the given (line, col). Validates bounds, the no-zero rule,
+ * and the no-reversed rule. Returns a non-NULL placeholder on error so
+ * parsing can continue. */
+static port_node *build_port_range(int low, int high, int line, int col);
+
+/* Validate a single standalone port (not in a list, not in a range). Port 0
+ * is LEGAL here and means ANY. Other out-of-range values emit a diagnostic
+ * but still produce a node so parsing continues. */
+static port_node *build_port_one(int p, int line, int col);
+
+/* Guard used when a port_item is appended to a multi-element list: port 0
+ * is forbidden in that context. Emits a diagnostic if it sees one. */
+static void forbid_any_in_list(port_node *list, int line, int col);
+
+/* Guard used on a @var's expanded port list: port 0 is only legal if it's
+ * the SOLE node in the list. Emits a diagnostic otherwise. */
+static void validate_var_port_list(port_node *list, int line, int col);
 %}
 
 %locations
@@ -57,6 +90,7 @@ void yyerror(const char *msg);
 %token ALLOW BLOCK OVERRIDE_ALLOW OVERRIDE_BLOCK
 %token AND OR
 %token TCP UDP
+%token ANY
 
 /* ---- nonterminal types ---- */
 %type <iplist> ip_list
@@ -64,8 +98,8 @@ void yyerror(const char *msg);
 %type <str>    value
 %type <act>    action
 %type <sel>    selector or_expr and_expr primary
-%type <ports>  port_list port_or_var rule_ports
-%type <protos> proto_list proto
+%type <ports>  port_spec port_list port_item rule_ports var_port_value
+%type <protos> proto_spec proto_list proto rule_protos
 
 %%
 
@@ -92,8 +126,6 @@ var_list
 var_def
     : VAR_LABEL '=' label_ref_item ';'
         {
-            /* A single label item on the RHS — wrap it in a list for
-             * var_label_define. $1 includes the '$' stripped by scanner. */
             var_label_define($1, $3, @1.first_line, @1.first_column);
             free($1);
         }
@@ -102,18 +134,27 @@ var_def
             var_label_define($1, $4, @1.first_line, @1.first_column);
             free($1);
         }
-    | VAR_PORT  '=' NUMBER ';'
+    | VAR_PORT  '=' var_port_value ';'
         {
-            var_port_define($1,
-                            mk_port($3, @3.first_line, @3.first_column),
-                            @1.first_line, @1.first_column);
+            validate_var_port_list($3, @1.first_line, @1.first_column);
+            var_port_define($1, $3, @1.first_line, @1.first_column);
             free($1);
         }
-    | VAR_PORT  '=' '[' port_list ']' ';'
+    ;
+
+/* RHS of a @var definition. Handles:
+ *   @v = ANY ;              -> single port_node with port=0
+ *   @v = 80 ;               -> single port_node (via port_item)
+ *   @v = 80-443 ;           -> expanded range
+ *   @v = 80,443,8000-8080 ; -> comma-separated list of items
+ * No brackets — those were the old syntax and are gone. */
+var_port_value
+    : ANY
         {
-            var_port_define($1, $4, @1.first_line, @1.first_column);
-            free($1);
+            $$ = mk_port(0, @1.first_line, @1.first_column);
         }
+    | port_list
+        { $$ = $1; }
     ;
 
 /* A single label ref — just a key:value pair (no $var nesting). */
@@ -154,8 +195,6 @@ label_list
     | label_list label_or_var           { $$ = label_append($1, $2); }
     ;
 
-/* Either a literal k:v pair or a $var expansion. Returns a label_node list
- * (a single leaf for literals, a multi-node list for $var expansions). */
 label_or_var
     : label                             { $$ = $1; }
     | VAR_LABEL
@@ -177,9 +216,13 @@ label
                                 }
     ;
 
+/* A label value can be a NAME, an IP (rare but legal), or the keyword ANY.
+ * The ANY case lets label values like `app:ANY` keep working even though
+ * ANY is a keyword token — the grammar's context disambiguates. */
 value
     : NAME                      { $$ = $1; }
     | IP                        { $$ = $1; }
+    | ANY                       { $$ = strdup("ANY"); }
     ;
 
 /* ------------------------------------------------------------- policy */
@@ -189,26 +232,73 @@ rule_list
     | rule_list rule
     ;
 
+/* Updated rule syntax:  action src '->' dst ':' port_spec ':' proto_spec ';' */
 rule
-    : action selector ARROW selector rule_ports proto_list ';'
+    : action selector ARROW selector rule_ports rule_protos ';'
         { add_rule($1, @1.first_line, @1.first_column, $2, $4, $5, $6); }
     ;
 
-/* Ports in a rule. Brackets are only required when there's more than one
- * element. Single items — either a NUMBER or an @var — stand alone. */
+/* The port section, introduced by ':'. ANY is a top-level alternative —
+ * the grammar itself prevents ":ANY,443" because ANY is not a port_item. */
 rule_ports
-    : NUMBER                            { $$ = mk_port($1, @1.first_line, @1.first_column); }
+    : ':' port_spec             { $$ = $2; }
+    | ':' ANY                   { $$ = mk_port(0, @2.first_line, @2.first_column); }
+    ;
+
+rule_protos
+    : ':' proto_spec            { $$ = $2; }
+    | ':' ANY                   { $$ = PROTO_TCP | PROTO_UDP; }
+    ;
+
+/* port_spec: a comma-separated list of port_items. A single port_item
+ * (just a NUMBER, a NUMBER-NUMBER range, or a @var) is also valid. */
+port_spec
+    : port_list                 { $$ = $1; }
+    ;
+
+port_list
+    : port_item                 { $$ = $1; }
+    | port_list ',' port_item
+        {
+            /* About to append — forbid 0 on either side. */
+            forbid_any_in_list($1, @3.first_line, @3.first_column);
+            forbid_any_in_list($3, @3.first_line, @3.first_column);
+            $$ = port_append($1, $3);
+        }
+    ;
+
+port_item
+    : NUMBER
+        { $$ = build_port_one($1, @1.first_line, @1.first_column); }
+    | NUMBER '-' NUMBER
+        { $$ = build_port_range($1, $3, @1.first_line, @1.first_column); }
     | VAR_PORT
         {
-            $$ = var_port_lookup($1);
-            if (!$$) {
+            port_node *pl = var_port_lookup($1);
+            if (!pl) {
                 diag_error(@1.first_line, @1.first_column,
                     "undefined variable @%s", $1);
                 g_semantic_errors++;
+                /* Placeholder so parsing continues cleanly. */
+                pl = mk_port(1, @1.first_line, @1.first_column);
             }
             free($1);
+            $$ = pl;
         }
-    | '[' port_list ']'                 { $$ = $2; }
+    ;
+
+proto_spec
+    : proto_list                { $$ = $1; }
+    ;
+
+proto_list
+    : proto                     { $$ = $1; }
+    | proto_list ',' proto      { $$ = $1 | $3; }
+    ;
+
+proto
+    : TCP                       { $$ = PROTO_TCP; }
+    | UDP                       { $$ = PROTO_UDP; }
     ;
 
 action
@@ -244,11 +334,9 @@ primary
                 diag_error(@1.first_line, @1.first_column,
                     "undefined variable $%s", $1);
                 g_semantic_errors++;
-                /* Fabricate a placeholder leaf so the rest of the rule
-                 * still parses; it won't match anything at bag-build time. */
-                $$ = sel_leaf("<error>", $1, @1.first_line, @1.first_column);
+                $$ = sel_leaf("<e>", $1, @1.first_line, @1.first_column);
             } else {
-                $$ = sel_from_labels(labels);   /* consumes labels */
+                $$ = sel_from_labels(labels);
             }
             free($1);
         }
@@ -256,44 +344,111 @@ primary
     | '[' sel_list ']'          { $$ = sel_from_labels($2); }
     ;
 
-/* Whitespace-separated list of label refs inside a selector '[...]'. Each
- * element may be a literal k:v pair or a $var (which expands into multiple
- * labels). The whole list becomes an OR-tree via sel_from_labels. */
 sel_list
     : label_or_var                      { $$ = $1; }
     | sel_list label_or_var             { $$ = label_append($1, $2); }
     ;
 
-port_list
-    : port_or_var                       { $$ = $1; }
-    | port_list port_or_var             { $$ = port_append($1, $2); }
-    ;
-
-port_or_var
-    : NUMBER                            { $$ = mk_port($1, @1.first_line, @1.first_column); }
-    | VAR_PORT
-        {
-            $$ = var_port_lookup($1);
-            if (!$$) {
-                diag_error(@1.first_line, @1.first_column,
-                    "undefined variable @%s", $1);
-                g_semantic_errors++;
-            }
-            free($1);
-        }
-    ;
-
-proto_list
-    : proto                     { $$ = $1; }
-    | proto_list ',' proto      { $$ = $1 | $3; }
-    ;
-
-proto
-    : TCP                       { $$ = PROTO_TCP; }
-    | UDP                       { $$ = PROTO_UDP; }
-    ;
-
 %%
+
+/* ---------------------------------------------------------------- *
+ *  Parser-local helpers                                            *
+ * ---------------------------------------------------------------- */
+
+/* Upper bound on how many ports a single range may expand to. Keeps a
+ * typo like "1-65535" from silently allocating 65k nodes — users who
+ * actually want "any port" should write :ANY. Matches MAX_RULES as a
+ * round, easy-to-remember cap. */
+#define MAX_RANGE_EXPANSION 4096
+
+static port_node *build_port_one(int p, int line, int col) {
+    /* Port 0 is legal here (means ANY in single-port position). Other
+     * out-of-range values get a diagnostic but still produce a node so
+     * parsing continues — add_rule's second-pass check won't double-fire
+     * because the value is clamped into range by this function. */
+    if (p < 0 || p > 65535) {
+        diag_error(line, col,
+            "port %d out of range (must be 0..65535, where 0 = ANY)", p);
+        g_semantic_errors++;
+        p = 1;  /* placeholder, but legal so we don't cascade */
+    }
+    return mk_port(p, line, col);
+}
+
+static port_node *build_port_range(int low, int high, int line, int col) {
+    /* Order of checks matters for clean diagnostics: zero first (most
+     * specific message), then reversal, then bounds. */
+    if (low == 0 || high == 0) {
+        diag_error(line, col,
+            "port 0 is reserved for ANY and cannot appear in a range");
+        g_semantic_errors++;
+        return mk_port(1, line, col);
+    }
+    if (low > high) {
+        diag_error(line, col,
+            "port range %d-%d is reversed (low-high required)", low, high);
+        g_semantic_errors++;
+        return mk_port(1, line, col);
+    }
+    if (low < 1 || low > 65535) {
+        diag_error(line, col,
+            "port %d out of range (must be 1..65535)", low);
+        g_semantic_errors++;
+        return mk_port(1, line, col);
+    }
+    if (high < 1 || high > 65535) {
+        diag_error(line, col,
+            "port %d out of range (must be 1..65535)", high);
+        g_semantic_errors++;
+        return mk_port(1, line, col);
+    }
+
+    int count = high - low + 1;
+    if (count > MAX_RANGE_EXPANSION) {
+        diag_error(line, col,
+            "port range %d-%d expands to %d ports (max %d); "
+            "use :ANY for a full wildcard or narrow the range",
+            low, high, count, MAX_RANGE_EXPANSION);
+        g_semantic_errors++;
+        return mk_port(low, line, col);
+    }
+
+    /* Degenerate low==high is fine — a one-element list. */
+    port_node *head = NULL;
+    for (int p = low; p <= high; p++) {
+        head = port_append(head, mk_port(p, line, col));
+    }
+    return head;
+}
+
+/* Walk a port list; if any node has port==0, emit the combine error
+ * pointing at the offending new element's location. */
+static void forbid_any_in_list(port_node *list, int line, int col) {
+    for (port_node *p = list; p; p = p->next) {
+        if (p->port == 0) {
+            diag_error(line, col,
+                "port 0 (ANY) cannot be combined with other ports; "
+                "use ':ANY' alone");
+            g_semantic_errors++;
+            return;  /* one diagnostic per list combination is enough */
+        }
+    }
+}
+
+/* A @var's expanded port list may contain a single 0 (meaning wildcard)
+ * or any number of non-zero ports. "0 mixed with anything" is illegal. */
+static void validate_var_port_list(port_node *list, int line, int col) {
+    int has_zero = 0, total = 0;
+    for (port_node *p = list; p; p = p->next) {
+        if (p->port == 0) has_zero = 1;
+        total++;
+    }
+    if (has_zero && total > 1) {
+        diag_error(line, col,
+            "@var: port 0 (ANY) cannot be combined with other ports");
+        g_semantic_errors++;
+    }
+}
 
 void yyerror(const char *msg) {
     diag_error(yylloc.first_line, yylloc.first_column, "%s", msg);

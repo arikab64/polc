@@ -312,18 +312,29 @@ static void print_one_resolved(const resolved_rule *rr) {
     printf("\n");
 
     printf("     ports    : ");
-    int first = 1;
-    for (port_node *p = rule->ports; p; p = p->next) {
-        printf("%s%d", first ? "" : ", ", p->port);
-        first = 0;
+    /* Mirror print_rules() in main.c: a single port_node with value 0
+     * is the ANY wildcard; otherwise render the list numerically. */
+    if (rule->ports && rule->ports->port == 0 && rule->ports->next == NULL) {
+        printf("ANY");
+    } else {
+        int first = 1;
+        for (port_node *p = rule->ports; p; p = p->next) {
+            printf("%s%d", first ? "" : ", ", p->port);
+            first = 0;
+        }
     }
     printf("\n");
 
     printf("     protos   : ");
-    first = 1;
-    if (rule->protos & PROTO_TCP) { printf("TCP"); first = 0; }
-    if (rule->protos & PROTO_UDP) { printf("%sUDP", first ? "" : ", "); first = 0; }
-    if (first) printf("(none)");
+    /* Full mask == all known protos == ANY. */
+    if (rule->protos == (PROTO_TCP | PROTO_UDP)) {
+        printf("ANY");
+    } else {
+        int first = 1;
+        if (rule->protos & PROTO_TCP) { printf("TCP"); first = 0; }
+        if (rule->protos & PROTO_UDP) { printf("%sUDP", first ? "" : ", "); first = 0; }
+        if (first) printf("(none)");
+    }
     printf("\n");
 }
 

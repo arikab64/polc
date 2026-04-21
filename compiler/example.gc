@@ -1,16 +1,26 @@
+# policy.gc — example using the new rule syntax.
+#
+# Rule shape:  ACTION src_selector -> dst_selector :PORTS :PROTOS ;
+# PORTS  := ANY | N | N-M | N,M,K-L,...   (comma list, range with '-')
+# PROTOS := ANY | TCP | UDP | TCP,UDP
+# Port 0 is the numeric equivalent of ANY and is only legal standalone.
+
 vars:
 
-# Label variables — single label or a list.
+# Label variables.
 $production   = env:production;
 $staging      = env:staging;
 $backendApps  = [ app:api-backend app:postgres ];
 $webApps      = [ app:web-front ];
 
-# Port variables — single port or a list.
-@http     = [80 8080];
-@https    = 443;
-@postgres = 5432;
-@ssh      = 22;
+# Port variables — comma lists and ranges; no brackets.
+@http         = 80,8080;
+@https        = 443;
+@postgres     = 5432;
+@ssh          = 22;
+@api          = 8000-8080;
+@metrics      = 9090,9100,9115;
+@wildcard     = ANY;          # stored as port 0; use it anywhere :@wildcard is written
 
 inventory:
 
@@ -22,16 +32,7 @@ web-prod-2 [10.0.1.10 10.0.1.11] => [
     role:server
 ];
 
-web-prod-3 [10.0.1.12] => [ role:server $production app:web-front ];
-
 api-prod-1 [10.0.2.20 10.0.2.21 10.0.2.22] => [
-    app:api-backend
-    $production
-    role:server
-    tier:backend
-];
-
-api-prod-2 [10.0.2.23] => [
     app:api-backend
     $production
     role:server
@@ -42,20 +43,27 @@ db-prod-1 [10.0.3.50] => [ app:postgres $production role:database ];
 
 policy:
 
-# Bare single label — no brackets needed.
-ALLOW app:web-front -> app:api-backend @http TCP;
+# Bare single label src, literal port, literal proto.
+ALLOW app:web-front -> app:api-backend :80 :TCP;
 
-# $production expands inline; @https is a single port (no brackets).
-ALLOW app:web-front AND $production -> app:api-backend AND $production @https TCP;
+# AND-composed selector with a port variable that's itself a list.
+ALLOW app:web-front AND $production -> app:api-backend AND $production :@http :TCP;
 
-# $backendApps is a multi-element var — bare reference expands to OR.
-ALLOW $webApps -> $backendApps @postgres TCP;
+# Bracketed selector list (OR over items), mixing vars and literals.
+ALLOW [$webApps app:api-backend] -> role:database :@postgres :TCP;
 
-# Bracketed selector list — OR over the items, mixing vars and literals.
-ALLOW [$webApps app:api-backend] -> role:database @postgres TCP;
+# Port range — expanded at parse time.
+ALLOW $webApps -> app:api-backend :8000-8080 :TCP;
 
-# Bracketed port list mixing literal + var.
-ALLOW (app:web-front OR app:api-backend) AND $production -> role:database [5432 @http] TCP,UDP;
+# Mixed list: literals, range, and proto list.
+ALLOW (app:web-front OR app:api-backend) AND $production
+    -> role:database :5432,@http :TCP,UDP;
 
-# Override rule with single-item ports (bare @var).
-OVERRIDE-BLOCK $production -> $staging @ssh TCP;
+# Wildcard port, single proto.
+ALLOW role:monitoring -> role:server :ANY :TCP;
+
+# Wildcard port AND wildcard proto — expands to TCP|UDP at compile time.
+ALLOW app:api-backend AND $production -> role:database :ANY :ANY;
+
+# OVERRIDE rule with literal port.
+OVERRIDE-BLOCK $production -> $staging :@ssh :TCP;

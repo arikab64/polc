@@ -1,8 +1,14 @@
 /*
- * scanner.l — lexical analyzer for the policy DSL (inventory section)
+ * scanner.l — lexical analyzer for the policy DSL.
  *
  * Tracks line + column via YY_USER_ACTION so every token carries a location
  * rectangle (first_line, first_column, last_line, last_column) in yylloc.
+ *
+ * Keyword additions in this revision:
+ *   ANY — wildcard keyword usable in rule port and proto sections, and in
+ *         @var definitions. Grammar disambiguates: in label values (e.g.
+ *         `app:ANY`) the `value` production accepts ANY as a string, so
+ *         labels keep working even though ANY is a keyword token.
  */
 %option noyywrap nounput noinput yylineno
 %{
@@ -32,7 +38,7 @@ NAME    [A-Za-z_][A-Za-z0-9_\-\.]*
 
 %%
 
-    /* Section headers (matched before NAME). Case-insensitive optional. */
+    /* Section headers (matched before NAME). */
 "inventory"     { return INVENTORY; }
 "policy"        { return POLICY; }
 "vars"          { return VARS; }
@@ -52,12 +58,16 @@ NAME    [A-Za-z_][A-Za-z0-9_\-\.]*
 "TCP"           { return TCP; }
 "UDP"           { return UDP; }
 
+    /* Wildcard keyword for port / proto sections (and @var definitions).
+     * Must come before NAME so it isn't scanned as an identifier. Inside
+     * label values the `value` production accepts ANY, so `app:ANY` still
+     * parses as a label with value "ANY". */
+"ANY"           { return ANY; }
+
     /* Rule direction arrow. Must come before IP rule since IPs don't use '->'. */
 "->"            { return ARROW; }
 
-    /* Variable references: $foo for label-like, @foo for port-like.
-     * The regex uses the same identifier body as NAME so hyphenated names
-     * like $backend-apps scan as a single token. */
+    /* Variable references: $foo for label-like, @foo for port-like. */
 "$"{NAME}       { yylval.str = strdup(yytext + 1); return VAR_LABEL; }
 "@"{NAME}       { yylval.str = strdup(yytext + 1); return VAR_PORT;  }
 
@@ -72,6 +82,7 @@ NAME    [A-Za-z_][A-Za-z0-9_\-\.]*
 ";"             { return ';'; }
 "("             { return '('; }
 ")"             { return ')'; }
+"-"             { return '-'; }
 
 {IP}            { yylval.str = strdup(yytext); return IP; }
 {NUMBER}        { yylval.num = atoi(yytext); return NUMBER; }
@@ -84,9 +95,8 @@ NAME    [A-Za-z_][A-Za-z0-9_\-\.]*
 [ \t\r]+        { /* non-newline whitespace — column already advanced */ }
 
 .               {
-                    diag_error(yylineno, yylloc.first_column,
-                               "unexpected character '%c'", yytext[0]);
+                    diag_error(yylloc.first_line, yylloc.first_column,
+                               "unexpected character '%s'", yytext);
                     g_semantic_errors++;
                 }
-
 %%

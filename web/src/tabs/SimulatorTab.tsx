@@ -11,7 +11,7 @@ import { Chip } from '../components/Chip'
 import { ResolvedIcon } from '../components/ResolvedIcon'
 import { RuleSelector } from '../components/RuleSelector'
 import { RulesTable } from '../components/RulesTable'
-import { bitvecToHex, truncateHex } from '../lib/format'
+import { bitvecToHex, formatPorts, truncateHex } from '../lib/format'
 
 interface Props {
   db: LoadedDb
@@ -466,7 +466,7 @@ function WinningRuleBlock({ rule }: { rule: Rule }) {
         {rule.ports.length > 0 && (
           <div className="sim-winner-row">
             <span className="sim-winner-label">ports</span>
-            <span className="col-ports">{rule.ports.join(', ')}</span>
+            <span className="col-ports">{formatPorts(rule.ports)}</span>
           </div>
         )}
         {rule.protos.length > 0 && (

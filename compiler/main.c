@@ -575,12 +575,17 @@ void add_rule(action_kind a, int line, int col,
     r->line   = line;
     r->col    = col;
 
-    /* Validate ports are in the 1..65535 range. Do it here so the error
-     * message can point at the specific port token. */
+    /* Validate ports are in the 0..65535 range. Port 0 is the numeric
+     * equivalent of the ANY keyword (wildcard) — legal standalone,
+     * already filtered by the parser's port_spec rules against appearing
+     * in multi-element lists or ranges. Anything outside this range is
+     * a genuine error. Done here so the error message can point at the
+     * specific port token. */
     for (port_node *p = ports; p; p = p->next) {
-        if (p->port < 1 || p->port > 65535) {
+        if (p->port < 0 || p->port > 65535) {
             diag_error(p->line, p->col,
-                "port %d out of range (must be 1..65535)", p->port);
+                "port %d out of range (must be 0..65535, where 0 = ANY)",
+                p->port);
             g_semantic_errors++;
         }
     }
@@ -641,17 +646,30 @@ void print_rules(void) {
         printf("     src    : "); print_selector(r->src); printf("\n");
         printf("     dst    : "); print_selector(r->dst); printf("\n");
         printf("     ports  : ");
-        int first = 1;
-        for (port_node *p = r->ports; p; p = p->next) {
-            printf("%s%d", first ? "" : ", ", p->port);
-            first = 0;
+        /* A single port_node with value 0 is the ANY wildcard — render
+         * it symbolically. Any other list prints numerically; a stray 0
+         * embedded in a multi-element list would show as "0" so a bug
+         * (which the parser should prevent) is visible rather than hidden. */
+        if (r->ports && r->ports->port == 0 && r->ports->next == NULL) {
+            printf("ANY");
+        } else {
+            int first = 1;
+            for (port_node *p = r->ports; p; p = p->next) {
+                printf("%s%d", first ? "" : ", ", p->port);
+                first = 0;
+            }
         }
         printf("\n");
         printf("     protos : ");
-        first = 1;
-        if (r->protos & PROTO_TCP) { printf("TCP"); first = 0; }
-        if (r->protos & PROTO_UDP) { printf("%sUDP", first ? "" : ", "); first = 0; }
-        if (first) printf("(none)");
+        /* Full mask == all known protos == ANY keyword in source. */
+        if (r->protos == (PROTO_TCP | PROTO_UDP)) {
+            printf("ANY");
+        } else {
+            int first = 1;
+            if (r->protos & PROTO_TCP) { printf("TCP"); first = 0; }
+            if (r->protos & PROTO_UDP) { printf("%sUDP", first ? "" : ", "); first = 0; }
+            if (first) printf("(none)");
+        }
         printf("\n");
     }
     printf("\n");

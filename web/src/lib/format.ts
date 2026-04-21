@@ -90,3 +90,49 @@ export function truncateHex(hex: string, head = 4, tail = 8): string {
   if (bare.length <= head + tail + 1) return hex
   return '0x' + bare.slice(0, head) + '…' + bare.slice(-tail)
 }
+
+/**
+ * Collapse a port list back into range notation for display.
+ *
+ * The compiler expands every source-level range at parse time — a rule
+ * written `:8000-8080` ends up as 81 rows in `rule_port`, because the
+ * datapath's bag_port lookup is per-port. That's correct for the
+ * runtime but unreadable in a table cell. This re-detects consecutive
+ * runs and prints `low-high` spans, so `[80, 443, 8000..8080]` becomes
+ * `"80, 443, 8000-8080"` again.
+ *
+ * Conventions match the DSL:
+ *   - `[0]` alone → "ANY" (the numeric spelling of the wildcard)
+ *   - empty/missing → "—" (the existing table placeholder)
+ *   - singletons render as just the number; runs of 2+ as `low-high`
+ *
+ * A stray 0 mixed with real ports renders as "0" (not "ANY") so an
+ * upstream bug shows loudly rather than hiding — the grammar forbids
+ * mixing 0 with other ports, so seeing one here indicates something
+ * went wrong before we got to formatting.
+ */
+export function formatPorts(ports: number[] | null | undefined): string {
+  if (!ports || ports.length === 0) return '—'
+  if (ports.length === 1 && ports[0] === 0) return 'ANY'
+
+  // Sort and dedupe defensively. The worker's SQL ORDER BY already does
+  // this, but the helper shouldn't assume — sorting tens of ints is free.
+  const sorted = Array.from(new Set(ports)).sort((a, b) => a - b)
+
+  const parts: string[] = []
+  let runStart = sorted[0]
+  let runEnd = sorted[0]
+
+  for (let i = 1; i < sorted.length; i++) {
+    if (sorted[i] === runEnd + 1) {
+      runEnd = sorted[i]  // extend the current run
+    } else {
+      parts.push(runStart === runEnd ? String(runStart) : `${runStart}-${runEnd}`)
+      runStart = sorted[i]
+      runEnd = sorted[i]
+    }
+  }
+  parts.push(runStart === runEnd ? String(runStart) : `${runStart}-${runEnd}`)
+
+  return parts.join(', ')
+}

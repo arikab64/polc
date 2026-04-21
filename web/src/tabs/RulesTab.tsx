@@ -9,6 +9,7 @@ import {
   type FilterFn,
 } from '@tanstack/react-table'
 import type { LoadedDb, Rule } from '../lib/types'
+import { formatPorts } from '../lib/format'
 import { ColumnFilter } from '../components/ColumnFilter'
 import { RuleSelector } from '../components/RuleSelector'
 import { ResolvedIcon } from '../components/ResolvedIcon'
@@ -84,9 +85,7 @@ export function RulesTab({ db }: RulesTabProps) {
         header: 'Ports',
         filterFn: multiSelectArray,
         cell: (info) => (
-          <span className="col-ports">
-            {info.getValue().length === 0 ? '—' : info.getValue().join(', ')}
-          </span>
+          <span className="col-ports">{formatPorts(info.getValue())}</span>
         ),
       }),
       columnHelper.accessor('protos', {
