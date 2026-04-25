@@ -71,7 +71,7 @@ Policy is written in **gc**, a small DSL with three sections: `vars`
 full grammar and semantics are in
 **[`compiler/LANGUAGE.md`](compiler/LANGUAGE.md)**.
 
-A short example:
+A short example (see [`example.gc`](example.gc) for the full file):
 
 ```
 vars:
