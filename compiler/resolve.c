@@ -1,5 +1,29 @@
 /*
  * resolve.c — compile selectors to DNF, match against EID bitsets.
+ *
+ * SEL_ALL handling (LANGUAGE.md §5.2 / §6.2):
+ *   When a rule's src or dst is the bare ALL_EIDS sentinel (`SEL_ALL`),
+ *   we DO NOT walk every EID in the inventory and stuff each one into
+ *   `*_eids`. The match-every-EID semantics is realized at runtime via
+ *   the bag layer's ANY_EID slot (see bags.c / bags.h):
+ *
+ *       src_vec = bagvec[bag_src[src_eid]] | bagvec[bag_src[ANY_EID]]
+ *
+ *   Leaving `src_eids` empty for SEL_ALL has two consequences this file
+ *   handles explicitly:
+ *
+ *     1. Triage. The "park as unresolved if *_eids.n == 0" check would
+ *        wrongly park every SEL_ALL rule. We add a kind == SEL_ALL
+ *        bypass: a SEL_ALL side is always considered resolved.
+ *
+ *     2. Printing. `print_one_resolved` renders "ALL_EIDS" instead of
+ *        "<none>" for the SEL_ALL side, so dump output matches the
+ *        spec's surface vocabulary.
+ *
+ *   The DNF for SEL_ALL is still built (one term, empty mask) so
+ *   `dnf_print()` keeps its existing semantics; nothing else queries
+ *   `*_eids` to decide whether the side "matches" — bag construction
+ *   reads the rule's `src->kind` directly (see bags.c).
  */
 #include "resolve.h"
 #include "diag.h"
@@ -106,7 +130,10 @@ dnf *sel_to_dnf(const sel_node *s) {
         case SEL_AND:  return dnf_and(sel_to_dnf(s->lhs), sel_to_dnf(s->rhs));
         case SEL_ALL: {
             /* ALL_EIDS: one term with an empty mask. lset_subset(empty, _)
-             * is always true, so this DNF matches every EID. */
+             * is always true, so this DNF matches every EID. We still
+             * build it so dnf_print() reads sensibly; bag construction
+             * uses sel->kind == SEL_ALL directly and never asks this
+             * DNF anything. */
             dnf      *d = mk_dnf();
             dnf_term *t = mk_term();
             dnf_append_term(d, t);
@@ -191,16 +218,33 @@ static resolved_rule *g_resolved_tail   = NULL;
 static resolved_rule *g_unresolved      = NULL;
 static resolved_rule *g_unresolved_tail = NULL;
 
+/* Is this side the ALL_EIDS sentinel?  Used both to skip the per-EID
+ * walk and to special-case unresolved-rule triage. */
+static inline int side_is_all(const sel_node *s) {
+    return s != NULL && s->kind == SEL_ALL;
+}
+
 static resolved_rule *resolve_one(const rule_node *r) {
     resolved_rule *rr = calloc(1, sizeof *rr);
     rr->rule_id = r->id;
     rr->src_dnf = sel_to_dnf(r->src);
     rr->dst_dnf = sel_to_dnf(r->dst);
 
-    /* Walk every EID once for src, once for dst. O(|EIDs|). */
-    for (eid_node *e = eid_list_head(); e; e = e->next) {
-        if (dnf_matches(rr->src_dnf, &e->labels)) eid_set_push(&rr->src_eids, e);
-        if (dnf_matches(rr->dst_dnf, &e->labels)) eid_set_push(&rr->dst_eids, e);
+    /* For SEL_ALL sides we leave the eid_set empty — bag construction
+     * reads `r->src->kind` / `r->dst->kind` and stuffs the rule's bit
+     * into the ANY_EID slot directly. The per-EID DNF walk would just
+     * be a wasted O(|EIDs|) iteration whose result the bag builder
+     * ignores anyway. */
+    int walk_src = !side_is_all(r->src);
+    int walk_dst = !side_is_all(r->dst);
+
+    if (walk_src || walk_dst) {
+        for (eid_node *e = eid_list_head(); e; e = e->next) {
+            if (walk_src && dnf_matches(rr->src_dnf, &e->labels))
+                eid_set_push(&rr->src_eids, e);
+            if (walk_dst && dnf_matches(rr->dst_dnf, &e->labels))
+                eid_set_push(&rr->dst_eids, e);
+        }
     }
     return rr;
 }
@@ -211,15 +255,23 @@ void resolve_all_rules(void) {
     for (rule_node *r = rule_list_head(); r; r = r->next) {
         resolved_rule *rr = resolve_one(r);
 
-        /* Triage: a rule where either side matches zero EIDs is dead in
-         * the current inventory — can never fire. Park it in the
-         * unresolved bucket and emit a warning. Keep the compilation
-         * successful; this isn't an error, just a heads-up. */
-        if (rr->src_eids.n == 0 || rr->dst_eids.n == 0) {
+        /* Triage: a rule where either side has no candidate EIDs is
+         * dead in the current inventory — can never fire. Park it in
+         * the unresolved bucket and emit a warning. Keep compilation
+         * successful; this isn't an error, just a heads-up.
+         *
+         * SEL_ALL is a special case: it matches every EID (resolved or
+         * not, per LANGUAGE.md §6.2) and contributes via the ANY_EID
+         * slot in the bag. So a SEL_ALL side is ALWAYS considered
+         * resolved, even when the inventory is empty. */
+        int src_dead = !side_is_all(r->src) && rr->src_eids.n == 0;
+        int dst_dead = !side_is_all(r->dst) && rr->dst_eids.n == 0;
+
+        if (src_dead || dst_dead) {
             const char *which =
-                (rr->src_eids.n == 0 && rr->dst_eids.n == 0) ? "src and dst" :
-                (rr->src_eids.n == 0)                         ? "src"         :
-                                                                "dst";
+                (src_dead && dst_dead) ? "src and dst" :
+                (src_dead)              ? "src"         :
+                                          "dst";
             diag_warning(r->line, r->col,
                 "rule R[%d] has no matching entities — %s selector"
                 " matches no EIDs in the current inventory",
@@ -292,6 +344,24 @@ static const rule_node *rule_by_id(int id) {
     return NULL;
 }
 
+/* Render the EID list for one side. SEL_ALL prints "ALL_EIDS" (the spec
+ * vocabulary) rather than enumerating; an empty list on a non-SEL_ALL
+ * side prints "<none>" — meaning the rule matched nothing in the
+ * current inventory. */
+static void print_side_eids(const sel_node *side, const eid_set *eids) {
+    if (side_is_all(side)) {
+        printf("ALL_EIDS");
+        return;
+    }
+    if (eids->n == 0) {
+        printf("<none>");
+        return;
+    }
+    for (size_t i = 0; i < eids->n; i++) {
+        printf("%sEID[%d]", i ? ", " : "", eid_index_of(eids->items[i]));
+    }
+}
+
 /* Shared renderer for a single resolved_rule block. */
 static void print_one_resolved(const resolved_rule *rr) {
     const rule_node *rule = rule_by_id(rr->rule_id);
@@ -303,20 +373,14 @@ static void print_one_resolved(const resolved_rule *rr) {
     dnf_print(rr->src_dnf);
     printf("\n");
     printf("     src eids : ");
-    if (rr->src_eids.n == 0) { printf("<none>"); }
-    else for (size_t i = 0; i < rr->src_eids.n; i++) {
-        printf("%sEID[%d]", i ? ", " : "", eid_index_of(rr->src_eids.items[i]));
-    }
+    print_side_eids(rule->src, &rr->src_eids);
     printf("\n");
 
     printf("     dst dnf  : ");
     dnf_print(rr->dst_dnf);
     printf("\n");
     printf("     dst eids : ");
-    if (rr->dst_eids.n == 0) { printf("<none>"); }
-    else for (size_t i = 0; i < rr->dst_eids.n; i++) {
-        printf("%sEID[%d]", i ? ", " : "", eid_index_of(rr->dst_eids.items[i]));
-    }
+    print_side_eids(rule->dst, &rr->dst_eids);
     printf("\n");
 
     printf("     ports    : ");

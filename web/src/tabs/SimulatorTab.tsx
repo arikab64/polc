@@ -11,7 +11,7 @@ import { Chip } from '../components/Chip'
 import { ResolvedIcon } from '../components/ResolvedIcon'
 import { RuleSelector } from '../components/RuleSelector'
 import { RulesTable } from '../components/RulesTable'
-import { bitvecToHex, formatPorts, truncateHex } from '../lib/format'
+import { ALL_EIDS_LABEL, bitvecToHex, formatPorts, truncateHex } from '../lib/format'
 
 interface Props {
   db: LoadedDb
@@ -27,6 +27,12 @@ const VECTOR_BYTES = 512
  *
  * Evaluation runs entirely in-process against the already-loaded data —
  * see lib/simulator.ts.
+ *
+ * ANY_EID handling: an IP that isn't in the inventory is no longer a
+ * short-circuit DENY; instead it resolves to the ANY_EID sentinel (per
+ * LANGUAGE.md §6.2) and the runtime ORs the bag's ANY_EID slot into
+ * the lookup. The Endpoints row and the bag-lookups row both surface
+ * this so the user can tell a "real" lookup from a fallback one.
  */
 export function SimulatorTab({ db }: Props) {
   const [srcIp, setSrcIp] = useState('')
@@ -293,6 +299,13 @@ function DebugPanel({ db, result }: { db: LoadedDb; result: SimulatorResult }) {
                   {result.bagSteps.map((step) => {
                     const hex = bitvecToHex(step.ruleIds, VECTOR_BYTES)
                     const isSelected = step.bag === selectedBag
+                    // src/dst steps may have ANY_EID contribution; show
+                    // it as a hint so the user can tell which rules
+                    // came from the concrete EID vs the ALL_EIDS slot.
+                    const anyN = step.anyEidRuleIds?.length ?? 0
+                    const eidN = step.eidRuleIds?.length ?? 0
+                    const showSplit =
+                      (step.bag === 'src' || step.bag === 'dst') && anyN > 0
                     return (
                       <tr
                         key={step.bag}
@@ -308,15 +321,27 @@ function DebugPanel({ db, result }: { db: LoadedDb; result: SimulatorResult }) {
                           <code className="sim-bag-name">bag_{step.bag}</code>
                         </td>
                         <td>
-                          <span className="sim-bag-key">{step.keyLabel}</span>
+                          <span className="sim-bag-key">
+                            {/* For unresolved IPs, the simulator already
+                             *  set keyLabel to the ANY_EID hex literal —
+                             *  swap to the ALL_EIDS spelling here so it
+                             *  matches the BagVectorTab's vocabulary. */}
+                            {(step.bag === 'src' || step.bag === 'dst') &&
+                            step.eidRuleIds !== undefined &&
+                            step.eidRuleIds.length === 0 &&
+                            anyN > 0 &&
+                            step.bagId === null
+                              ? ALL_EIDS_LABEL
+                              : step.keyLabel}
+                          </span>
                           {step.keyExplain && (
                             <span className="sim-bag-key-hint">{step.keyExplain}</span>
                           )}
                         </td>
                         <td>
                           <code className="sim-bag-hex" title={hex}>
-                            {step.bagId === null ? (
-                              <span className="sim-bag-miss">(not in bag)</span>
+                            {step.ruleIds.length === 0 ? (
+                              <span className="sim-bag-miss">(empty)</span>
                             ) : (
                               truncateHex(hex)
                             )}
@@ -326,6 +351,14 @@ function DebugPanel({ db, result }: { db: LoadedDb; result: SimulatorResult }) {
                           {step.ruleIds.length === 0
                             ? '—'
                             : `{${step.ruleIds.join(', ')}}`}
+                          {showSplit && (
+                            <span
+                              className="sim-bag-anyeid-hint"
+                              title={`${eidN} from concrete EID, ${anyN} from ALL_EIDS slot`}
+                            >
+                              {' '}({eidN} + {anyN} from {ALL_EIDS_LABEL})
+                            </span>
+                          )}
                         </td>
                       </tr>
                     )
@@ -350,7 +383,7 @@ function DebugPanel({ db, result }: { db: LoadedDb; result: SimulatorResult }) {
               {selectedStep ? (
                 <RulesTable
                   rules={selectedRules}
-                  visibleColumns={['id', 'src', 'dst', 'ports', 'protos']}
+                  visibleColumns={['id', 'action', 'src', 'dst', 'ports', 'protos']}
                   nothingToShowMessage="— bag is empty —"
                   emptyMessage="no rules match the active filters"
                 />
@@ -399,6 +432,14 @@ function DebugPanel({ db, result }: { db: LoadedDb; result: SimulatorResult }) {
   )
 }
 
+/**
+ * One row of the Endpoints table — src or dst.
+ *
+ * When the IP isn't in the inventory we now treat it as ANY_EID rather
+ * than as a hard miss (per LANGUAGE.md §6.2). The row reflects that:
+ * EID column shows "ALL_EIDS", asset/labels stay empty (there's no
+ * concrete asset), and a small hint clarifies the fallback.
+ */
 function EndpointRow({
   side,
   resolution,
@@ -419,14 +460,21 @@ function EndpointRow({
         {asset ? (
           <span className="col-eid">{asset.eidHex}</span>
         ) : (
-          <span className="sim-miss">— not found —</span>
+          <span
+            className="col-eid col-eid--any"
+            title="IP not in inventory — resolves to ANY_EID per LANGUAGE.md §6.2"
+          >
+            {ALL_EIDS_LABEL}
+          </span>
         )}
       </td>
       <td>
         {asset ? (
           <span className="col-asset">{asset.name}</span>
         ) : (
-          <span className="sim-miss">—</span>
+          <span className="sim-miss" title="IP has no entry in the inventory">
+            — unresolved —
+          </span>
         )}
       </td>
       <td>

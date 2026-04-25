@@ -1,0 +1,107 @@
+/* =========================================================
+ * ANY_EID / SEL_ALL styling additions
+ *
+ * Append these rules to the main stylesheet (or @import this file
+ * from styles.css). They give the ALL_EIDS / ANY pseudo-keys a
+ * subtle but distinct look so they read as "the wildcard" — not as
+ * just another EID, label, or hex.
+ *
+ * Aesthetic stays consistent with the rest of the chrome: muted
+ * type, dotted underline as a hint affordance, accent color reserved
+ * for selection. No backgrounds, no chips — the sentinel is data,
+ * not navigation.
+ * ========================================================= */
+
+/* The "ALL_EIDS" pseudo-key, wherever it appears (BagVectorTab cell,
+ * BitvecModal title, SimulatorTab Endpoint row). Italic separates it
+ * visually from the surrounding mono hex without shouting. */
+.col-eid.col-eid--any {
+  font-style: italic;
+  color: var(--ink-muted);
+  letter-spacing: 0.06em;
+  /* dotted underline = "hover for a tooltip explaining what this is" */
+  border-bottom: 1px dotted var(--line-strong);
+  padding-bottom: 1px;
+  cursor: help;
+}
+
+/* The bag_src / bag_dst row whose key is ANY_EID. Slightly raised
+ * background and a left-edge accent stripe make it feel like a
+ * "header" for the rows beneath it without breaking the table grid.
+ * Selection still wins (row-selected sets its own background). */
+.bagvec-row--any-eid > td {
+  background: var(--bg-raised);
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+}
+
+.bagvec-row--any-eid > td:first-child {
+  position: relative;
+}
+
+.bagvec-row--any-eid > td:first-child::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: var(--accent);
+  opacity: 0.5;
+}
+
+/* row-selected wins over the any-eid background — same precedence as
+ * elsewhere in the table. Re-asserting it here keeps the selected row
+ * readable when it's also the ANY_EID row. */
+.bagvec-row--any-eid.row-selected > td {
+  background: var(--bg-raised);
+}
+
+/* Bottom-panel hint: small italic addendum after the ALL_EIDS key,
+ * explaining the row's runtime behavior in one phrase. */
+.bagvec-bottom-anyeid-hint {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--ink-dim);
+  font-style: italic;
+  letter-spacing: 0.02em;
+}
+
+/* Simulator: the "(N + M from ALL_EIDS)" annotation on a src/dst bag
+ * row's Rules cell. Lives inline with the rule-id list, dimmed so it
+ * doesn't compete with the actual numbers. */
+.sim-bag-anyeid-hint {
+  color: var(--ink-dim);
+  font-style: italic;
+  font-size: 11px;
+  letter-spacing: 0.02em;
+}
+
+/* =========================================================
+ *  RuleSelector — the literal "ANY" keyword
+ *
+ *  Rendered when a rule's src or dst is the SEL_ALL sentinel
+ *  (LANGUAGE.md §5.2 row 1). Treated as a keyword like AND/OR
+ *  rather than a chip — small caps, accent color, no background.
+ *  Same visual register as `.selector-kw` so it harmonizes with
+ *  the surrounding DNF rendering.
+ * ========================================================= */
+.selector-any {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--accent);
+  /* dotted underline mirrors the col-eid--any treatment so the user
+   * learns "italic/dotted = wildcard" across the UI */
+  border-bottom: 1px dotted var(--line-strong);
+  padding: 0 2px 1px 2px;
+  cursor: help;
+}
+
+/* The whole term wrapper — when the term is just ANY, drop any
+ * inter-element gap that would otherwise be sized for a chip. */
+.selector-term--any {
+  gap: 0;
+}

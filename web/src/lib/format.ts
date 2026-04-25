@@ -13,6 +13,16 @@
  *              We format as 0x + 16 hex chars. sqlite-wasm returns
  *              large ints as BigInt when bigint support is on; we
  *              also accept number here for robustness.
+ *
+ *   ANY_EID  — the sentinel EID hash 0, used as a key in bag_src /
+ *              bag_dst to hold rules whose side is the ALL_EIDS
+ *              selector (bare `ANY`). Per LANGUAGE.md §6.2, the
+ *              runtime ipcache returns ANY_EID for unresolved IPs,
+ *              and the bag layer's contract is:
+ *                  bag_*[concrete] | bag_*[ANY_EID]
+ *              This file exposes the canonical hex form and a couple
+ *              of helpers so consumers don't string-compare the
+ *              all-zero literal in random places.
  */
 
 /** Render a host-order uint32 as a dotted-quad string. */
@@ -26,6 +36,47 @@ export function eidToHex(hash: number | bigint): string {
   const b = typeof hash === 'bigint' ? BigInt.asUintN(64, hash) : BigInt.asUintN(64, BigInt(hash))
   return '0x' + b.toString(16).padStart(16, '0').toUpperCase()
 }
+
+/* ============================================================
+ *  ANY_EID — the ALL_EIDS bag-key sentinel
+ * ============================================================ */
+
+/**
+ * Canonical hex form of the ANY_EID sentinel — `eidToHex(0)`. Stored
+ * as a constant rather than recomputed because (a) we string-compare
+ * against it from several call sites and (b) it's clearer to grep for
+ * `ANY_EID_HEX` than for a literal `'0x0000000000000000'`.
+ */
+export const ANY_EID_HEX = '0x0000000000000000'
+
+/**
+ * Display label for the ALL_EIDS slot — matches `fmt_eid_key()` in
+ * the compiler's bags.c so the web UI and `polc --dump` agree on the
+ * spelling.
+ */
+export const ALL_EIDS_LABEL = 'ALL_EIDS'
+
+/** True iff `eidHex` refers to the ANY_EID sentinel. */
+export function isAnyEid(eidHex: string): boolean {
+  return eidHex === ANY_EID_HEX
+}
+
+/**
+ * Render a bag_src / bag_dst key for display. ANY_EID renders as
+ * "ALL_EIDS" — the spec vocabulary for the sentinel — and every other
+ * EID hash renders as its hex form unchanged.
+ *
+ * Use this anywhere a bag-EID key is shown to the user; reserve raw
+ * `eidHex` for places that need the underlying value (joins, equality
+ * checks, copy-paste into a query).
+ */
+export function formatBagEidKey(eidHex: string): string {
+  return isAnyEid(eidHex) ? ALL_EIDS_LABEL : eidHex
+}
+
+/* ============================================================
+ *  rest of the helpers (unchanged)
+ * ============================================================ */
 
 /**
  * Map a label key to a chip-color class. Three well-known keys

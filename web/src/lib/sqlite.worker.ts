@@ -30,7 +30,7 @@ import type {
   WorkerRequest,
   WorkerResponse,
 } from './types'
-import { eidToHex, ipToString, sortLabels } from './format'
+import { ANY_EID_HEX, eidToHex, ipToString, sortLabels } from './format'
 
 /* The four symbolic tables the inventory tab needs. All four live in
  * SCHEMA_DEBUG_SQL in builder.c, so their absence == non-debug build. */
@@ -311,6 +311,31 @@ interface RawBagEidRow    { key: bigint | number; bag_id: number }
 interface RawBagPortRow   { key: number; bag_id: number }
 interface RawBagProtoRow  { key: string; bag_id: number }
 
+/**
+ * Sort an EID-keyed bag (bag_src / bag_dst) so the ANY_EID sentinel —
+ * if present — floats to the top of the list. This matches the
+ * compiler's `print_map` ordering in bags.c (sort_k = -1 for ANY_EID)
+ * and makes the BagVectorTab render the ALL_EIDS row first, which
+ * reflects its semantic role: it's the floor that gets OR'd into every
+ * concrete-EID lookup at runtime.
+ *
+ * Concrete EIDs keep their on-disk order (lexicographic-ish hex by
+ * insertion); we don't try to recover EID ordinals here since those
+ * aren't in the bag tables.
+ */
+function sortEidBag(entries: BagEntry[]): BagEntry[] {
+  const any: BagEntry[] = []
+  const rest: BagEntry[] = []
+  for (const e of entries) {
+    if (e.key === ANY_EID_HEX) any.push(e)
+    else rest.push(e)
+  }
+  // Stable sort of the rest by hex string — gives a deterministic order
+  // across runs even though the source SQL has no ORDER BY for the EID bags.
+  rest.sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0))
+  return [...any, ...rest]
+}
+
 function loadBags(db: Database): Bags {
   // One query for all the bit rows — pivot in JS to avoid N+1 queries.
   const ruleIdsByBag = new Map<number, number[]>()
@@ -344,8 +369,10 @@ function loadBags(db: Database): Bags {
     return out
   }
 
-  const src = eidEntries('SELECT eid_hash AS key, bag_id FROM bag_src')
-  const dst = eidEntries('SELECT eid_hash AS key, bag_id FROM bag_dst')
+  // bag_src / bag_dst: both can carry an ANY_EID row (eid_hash = 0).
+  // Sort it to the top — see sortEidBag for rationale.
+  const src = sortEidBag(eidEntries('SELECT eid_hash AS key, bag_id FROM bag_src'))
+  const dst = sortEidBag(eidEntries('SELECT eid_hash AS key, bag_id FROM bag_dst'))
 
   const port: BagEntry[] = []
   db.exec({
@@ -499,11 +526,6 @@ async function handleOpen(buffer: ArrayBuffer, filename: string): Promise<void> 
 self.onmessage = (e: MessageEvent<WorkerRequest>) => {
   const msg = e.data
   if (msg.kind === 'open') {
-    handleOpen(msg.buffer, msg.filename).catch((err) => {
-      post({
-        kind: 'error',
-        message: err instanceof Error ? err.message : String(err),
-      })
-    })
+    void handleOpen(msg.buffer, msg.filename)
   }
 }

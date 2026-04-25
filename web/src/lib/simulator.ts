@@ -1,10 +1,23 @@
 /**
  * Packet evaluator — simulates what the runtime datapath would do:
  *
- *   src IP → EID via ipcache
- *   dst IP → EID
- *   AND(bag_src[src_eid], bag_dst[dst_eid], bag_port[port], bag_proto[proto])
+ *   src IP → EID via ipcache (or ANY_EID if not in inventory)
+ *   dst IP → EID via ipcache (or ANY_EID if not in inventory)
+ *
+ *   src_vec   = bagvec[bag_src[src_eid]]   |  bagvec[bag_src[ANY_EID]]
+ *   dst_vec   = bagvec[bag_dst[dst_eid]]   |  bagvec[bag_dst[ANY_EID]]
+ *   port_vec  = bagvec[bag_port[port]]
+ *   proto_vec = bagvec[bag_proto[proto]]
+ *
+ *   matching = src_vec & dst_vec & port_vec & proto_vec
  *   → pick highest-priority matching rule
+ *
+ * The OR with `bag_*[ANY_EID]` is the runtime side of the ALL_EIDS
+ * selector (LANGUAGE.md §5.2 / §6.2): a rule with `ANY` on its src or
+ * dst contributed its bit to the bag's ANY_EID slot only — never to
+ * the per-EID slots. The OR fuses the two streams so the rule fires
+ * for every EID, including unresolved IPs (which have no concrete
+ * slot at all).
  *
  * Rule precedence (highest to lowest):
  *   1. OVERRIDE-BLOCK — an explicit deny trumps everything
@@ -17,11 +30,13 @@
  * produce.
  *
  * The evaluator returns a rich trace so the UI can show each step:
- * which bag produced which bit-set, which AND eliminated which rules,
- * which rule finally won.
+ * which bag produced which bit-set, which rules came from the concrete
+ * EID vs the ALL_EIDS slot, which AND eliminated which rules, which
+ * rule finally won.
  */
 
 import type { Asset, Bags, LoadedDb, Rule, RuleAction } from './types'
+import { ANY_EID_HEX } from './format'
 
 export type Protocol = 'TCP' | 'UDP'
 
@@ -41,23 +56,48 @@ export interface BagLookupStep {
   keyLabel: string
   /** Human explanation of how we arrived at the key (e.g. "ipcache → EID"). */
   keyExplain?: string
-  /** bag_id the key mapped to, or null if the key wasn't present in the bag. */
+  /** bag_id the key mapped to, or null if the key wasn't present in the bag.
+   *  For src/dst this is the *concrete-EID* bag_id only; the ANY_EID
+   *  slot — if any — is reflected via `anyEidRuleIds`. */
   bagId: number | null
-  /** Rule IDs set in that bag's bitvector. Empty if bagId is null. */
+  /**
+   * Rule IDs whose bit is set after considering this step's contribution
+   * to the AND. Equal to (concrete-EID bits) ∪ (ANY_EID bits) for src/dst,
+   * and just the bag's bits for port/proto.
+   *
+   * This is what gets fed into the four-way intersection.
+   */
   ruleIds: number[]
+  /**
+   * src/dst only: rule IDs from the bag's concrete-EID slot. Empty if
+   * the IP didn't resolve (so there was no concrete EID to look up) or
+   * if the key wasn't present in the bag. Excludes the ANY_EID slot's
+   * contribution — see `anyEidRuleIds` for that.
+   */
+  eidRuleIds?: number[]
+  /**
+   * src/dst only: rule IDs from the bag's ANY_EID slot. These are the
+   * bits owned by rules whose side was `SEL_ALL` (bare `ANY` / bare
+   * subnet). Always OR'd into `ruleIds` regardless of whether the IP
+   * resolved.
+   */
+  anyEidRuleIds?: number[]
 }
 
 export interface Resolution {
   /** The IP the user supplied. */
   ip: string
-  /** The asset that owns it, if any. */
+  /** The asset that owns it, if any. Null when the IP isn't in the
+   *  inventory — in that case the IP is treated as ANY_EID for bag
+   *  lookups, so a missing asset no longer short-circuits to DENY. */
   asset: Asset | null
 }
 
 export interface SimulatorResult {
   input: SimulatorInput
-  /** Resolution of each IP to its owning asset. asset is null if the IP
-   *  isn't in the inventory — that short-circuits to DENY. */
+  /** Resolution of each IP to its owning asset. asset is null if the
+   *  IP isn't in the inventory; the simulator still runs in that case
+   *  via the ANY_EID fallback. */
   srcResolution: Resolution
   dstResolution: Resolution
   /** Per-bag lookup trace. Always four entries in order src/dst/port/proto. */
@@ -77,30 +117,18 @@ export function simulate(db: LoadedDb, input: SimulatorInput): SimulatorResult {
   const srcResolution = resolveIp(db, input.srcIp)
   const dstResolution = resolveIp(db, input.dstIp)
 
-  // If either IP isn't in the inventory, we can't run the bag lookups
-  // at all — no src/dst EID, no bags to AND. Short-circuit to DENY.
-  if (!srcResolution.asset || !dstResolution.asset) {
-    const missingSide = !srcResolution.asset ? 'source' : 'destination'
-    const missingIp = !srcResolution.asset ? input.srcIp : input.dstIp
-    return {
-      input,
-      srcResolution,
-      dstResolution,
-      bagSteps: [],
-      matchingRuleIds: [],
-      winningRule: null,
-      verdict: 'DENY',
-      verdictReason: `${missingSide} IP ${missingIp} has no EID in the inventory — default-deny`,
-    }
-  }
-
-  // Build the four bag-lookup steps. Each yields a ruleId set (empty for
-  // "key not present" which is equivalent to the all-zero bagvec).
-  const srcStep = lookupEidBag(db.bags, 'src', srcResolution.asset.eidHex, input.srcIp)
-  const dstStep = lookupEidBag(db.bags, 'dst', dstResolution.asset.eidHex, input.dstIp)
+  // Build the four bag-lookup steps. Unresolved IPs no longer
+  // short-circuit to DENY — they fall through to the ANY_EID slot, which
+  // by spec catches every rule whose side was the ALL_EIDS selector. If
+  // there's no such rule (and no concrete-EID match), src_vec or dst_vec
+  // is empty and the AND is too — we'll DENY further down for the right
+  // reason ("no rule covered the lookup key") rather than the wrong one
+  // ("IP not in inventory").
+  const srcStep = lookupEidBag(db.bags, 'src', srcResolution, input.srcIp)
+  const dstStep = lookupEidBag(db.bags, 'dst', dstResolution, input.dstIp)
   const portStep = lookupPortBag(db.bags, input.port)
   const protoStep = lookupProtoBag(db.bags, input.proto)
-  const bagSteps = [srcStep, dstStep, portStep, protoStep]
+  const bagSteps: BagLookupStep[] = [srcStep, dstStep, portStep, protoStep]
 
   // AND of the four rule-id sets.
   const matching = intersectAll([
@@ -159,19 +187,55 @@ function resolveIp(db: LoadedDb, ip: string): Resolution {
   return { ip, asset }
 }
 
+/**
+ * Look up an EID-keyed bag (src or dst) for a given resolution.
+ *
+ * Always consults the ANY_EID slot in addition to the concrete-EID
+ * slot. The result's `ruleIds` is the union, which is what feeds the
+ * four-way AND. `eidRuleIds` and `anyEidRuleIds` keep the two streams
+ * separate so the trace UI can show "this came from your asset" vs
+ * "this came from a SEL_ALL rule".
+ *
+ * For unresolved IPs (`resolution.asset == null`) there is no concrete
+ * slot to look up — `eidRuleIds` is empty and the entire `ruleIds`
+ * comes from the ANY_EID slot. This is what implements the
+ * "unresolved IP → ANY_EID" semantics from LANGUAGE.md §6.2.
+ */
 function lookupEidBag(
   bags: Bags,
   bag: 'src' | 'dst',
-  eidHex: string,
+  resolution: Resolution,
   ip: string,
 ): BagLookupStep {
-  const entry = bags[bag].find((e) => e.key === eidHex)
+  const asset = resolution.asset
+  const concrete = asset
+    ? bags[bag].find((e) => e.key === asset.eidHex) ?? null
+    : null
+  const anyEntry = bags[bag].find((e) => e.key === ANY_EID_HEX) ?? null
+
+  const eidRuleIds = concrete?.ruleIds ?? []
+  const anyEidRuleIds = anyEntry?.ruleIds ?? []
+
+  // Union — JS Set keeps it small even if the lists are long.
+  const union = new Set<number>(eidRuleIds)
+  for (const r of anyEidRuleIds) union.add(r)
+  const ruleIds = [...union].sort((a, b) => a - b)
+
+  // Display key + explainer. Resolved IP shows its EID; unresolved IP
+  // shows the ANY_EID hex so the user can see the fallback in action.
+  const keyLabel = asset ? asset.eidHex : ANY_EID_HEX
+  const keyExplain = asset
+    ? `${ip} → ipcache → ${asset.eidHex}`
+    : `${ip} not in ipcache → ANY_EID`
+
   return {
     bag,
-    keyLabel: eidHex,
-    keyExplain: `${ip} → ipcache → ${eidHex}`,
-    bagId: entry?.bagId ?? null,
-    ruleIds: entry?.ruleIds ?? [],
+    keyLabel,
+    keyExplain,
+    bagId: concrete?.bagId ?? null,
+    ruleIds,
+    eidRuleIds,
+    anyEidRuleIds,
   }
 }
 

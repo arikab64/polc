@@ -51,6 +51,23 @@ interface RulesTableProps {
 
 const columnHelper = createColumnHelper<Rule>()
 
+/* -------------------- helpers -------------------- */
+
+/**
+ * A side is "ANY" iff its DNF is exactly one term with no labels and not
+ * flagged undefined. This is how the compiler emits a `SEL_ALL` selector
+ * (LANGUAGE.md §5.2): one empty-mask term whose `lset_subset(empty, _)`
+ * is always true, which during compile-time matched every EID. The web
+ * round-trips it as `[ { labels: [], undefined: false } ]`.
+ *
+ * Note: an `undefined` term also has zero labels, but it can never
+ * match anything — so it's NOT the same thing as ANY. We disambiguate
+ * via `term.undefined`.
+ */
+function sideIsAny(terms: Rule['src']): boolean {
+  return terms.length === 1 && terms[0].labels.length === 0 && !terms[0].undefined
+}
+
 /* -------------------- filters -------------------- */
 
 const multiSelectString: FilterFn<Rule> = (row, columnId, filterValue) => {
@@ -73,14 +90,22 @@ const resolvedFilter: FilterFn<Rule> = (row, _columnId, filterValue) => {
   return selected.includes(key)
 }
 
-/** Filter a selector side (src or dst) by label strings. A rule passes
- *  if any of its DNF terms on that side contains any of the selected
- *  `key:value` labels. Standard "does this rule mention app:web-front?"
- *  semantics. */
+/**
+ * Filter a selector side (src or dst) by label strings. A rule passes if
+ * any of its DNF terms on that side contains any of the selected
+ * `key:value` labels.
+ *
+ * ANY (SEL_ALL) special-case: a side written as bare `ANY` matches every
+ * label by definition (LANGUAGE.md §5.2 row 1 / §6.2). So an ANY side
+ * always passes any label filter — otherwise selecting "app:web" in the
+ * Src filter would hide a rule like `ALLOW ANY -> app:web` even though
+ * that rule does cover app:web sources.
+ */
 const selectorLabelFilter: FilterFn<Rule> = (row, columnId, filterValue) => {
   const selected = filterValue as string[] | undefined
   if (!selected || selected.length === 0) return true
   const terms = row.getValue(columnId) as Rule['src']
+  if (sideIsAny(terms)) return true
   for (const term of terms) {
     for (const lbl of term.labels) {
       if (selected.includes(`${lbl.key}:${lbl.value}`)) return true
@@ -110,14 +135,22 @@ const sortByPortsNumeric: SortingFn<Rule> = (a, b) => {
   return ap - bp
 }
 
-/** Sort selectors by their rendered label list — good enough for grouping
- *  rules with identical selectors together. Not a perfect DNF comparator
- *  but sufficient for a filter-assist sort. */
+/**
+ * Sort selectors by their rendered label list — good enough for grouping
+ * rules with identical selectors together. Not a perfect DNF comparator
+ * but sufficient for a filter-assist sort.
+ *
+ * ANY sides sort under the literal key "ANY" so all `ANY -> ...` rules
+ * group together at the same position regardless of dst contents.
+ */
 const sortBySelectorString: SortingFn<Rule> = (a, b) => {
-  const toKey = (r: Rule, side: 'src' | 'dst') =>
-    r[side]
+  const sideKey = (terms: Rule['src']) => {
+    if (sideIsAny(terms)) return 'ANY'
+    return terms
       .map((t) => t.labels.map((l) => `${l.key}:${l.value}`).join(','))
       .join('|')
+  }
+  const toKey = (r: Rule, side: 'src' | 'dst') => sideKey(r[side])
   // columnId comes in as the sort state — but we don't have access here
   // without the SortingFn being parameterized. Fall back to comparing
   // both sides concatenated. Callers pass this comparator to whichever
@@ -143,6 +176,11 @@ export function RulesTable({
   // the whole DB), here we want options that actually appear in `rules`
   // — otherwise the filter popover would offer ports that filter away
   // everything.
+  //
+  // Note: ANY sides contribute no labels here (a SEL_ALL side has one
+  // empty-labels term). That's intentional — "ANY" isn't a label, so it
+  // doesn't belong in the label-filter popover. The selectorLabelFilter
+  // above lets ANY rules pass any label filter unconditionally instead.
   const filterOptions = useMemo(() => {
     const actions = new Set<string>()
     const ports = new Set<number>()

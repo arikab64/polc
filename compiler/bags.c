@@ -9,6 +9,18 @@
  *
  * The final four maps plus one shared bagvec store are what everything
  * downstream (printer, accessors, SQLite emitter) consumes.
+ *
+ * ALL_EIDS (LANGUAGE.md §5.2 / §6.2):
+ *   A rule whose src is `SEL_ALL` (bare `ANY`) sets its bit ONLY in the
+ *   src scratch slot keyed by ANY_EID. It does NOT pre-OR into every
+ *   concrete-EID slot. Same for dst. The runtime is responsible for
+ *   OR-ing `bag_*[concrete_eid]` with `bag_*[ANY_EID]` per packet:
+ *
+ *       src_vec = bagvec[bag_src[src_eid]] | bagvec[bag_src[ANY_EID]]
+ *
+ *   This keeps each concrete-EID's bitvec lean (only the rules whose
+ *   selector actually named that EID via labels) and gives the dedup
+ *   index more identical vectors to collapse.
  */
 #include "bags.h"
 #include "ast.h"
@@ -333,7 +345,12 @@ static void intern_scratch_into(const scratch_bag *src, bagmap *dst) {
         if (!src->slots[i].state) continue;
         bag_id_t id = bagvec_intern(&src->slots[i].vec);
         /* Only record non-zero mappings — missing key ⇒ BAG_ID_ZERO via
-         * the getter fallback, so storing zeros would be redundant. */
+         * the getter fallback, so storing zeros would be redundant.
+         *
+         * This applies uniformly to the ANY_EID slot too: if no rule had
+         * SEL_ALL on this side, the slot's bitvec is all-zero and we
+         * skip it. Runtime lookup of bag_*[ANY_EID] then returns
+         * BAG_ID_ZERO and the OR is a no-op. */
         if (id == BAG_ID_ZERO) continue;
         bagmap_set(dst, src->slots[i].key, id);
     }
@@ -356,18 +373,44 @@ void build_bags(void) {
         if (!rule) continue;
         if (rule->id > g_max_rule_id) g_max_rule_id = rule->id;
 
-        for (size_t i = 0; i < rr->src_eids.n; i++) {
-            rule_bitvec *v = scratch_get_or_create(&s_src, rr->src_eids.items[i]->hash);
+        /* --- src side ---
+         * Two mutually-exclusive cases:
+         *   - SEL_ALL: rule applies to every EID, including unresolved
+         *     IPs (ANY_EID). Bit goes into the ANY_EID slot ONLY.
+         *     `rr->src_eids` is empty in this case (resolve_one skips
+         *     the per-EID walk for SEL_ALL).
+         *   - concrete selector: bit goes into one slot per matched EID,
+         *     keyed by the EID's hash. ANY_EID slot is untouched. */
+        if (rule->src && rule->src->kind == SEL_ALL) {
+            rule_bitvec *v = scratch_get_or_create(&s_src, ANY_EID);
             rvec_set(v, rule->id);
+        } else {
+            for (size_t i = 0; i < rr->src_eids.n; i++) {
+                rule_bitvec *v = scratch_get_or_create(
+                    &s_src, rr->src_eids.items[i]->hash);
+                rvec_set(v, rule->id);
+            }
         }
-        for (size_t i = 0; i < rr->dst_eids.n; i++) {
-            rule_bitvec *v = scratch_get_or_create(&s_dst, rr->dst_eids.items[i]->hash);
+
+        /* --- dst side --- (symmetric to src) */
+        if (rule->dst && rule->dst->kind == SEL_ALL) {
+            rule_bitvec *v = scratch_get_or_create(&s_dst, ANY_EID);
             rvec_set(v, rule->id);
+        } else {
+            for (size_t i = 0; i < rr->dst_eids.n; i++) {
+                rule_bitvec *v = scratch_get_or_create(
+                    &s_dst, rr->dst_eids.items[i]->hash);
+                rvec_set(v, rule->id);
+            }
         }
+
+        /* --- ports --- (unchanged) */
         for (port_node *p = rule->ports; p; p = p->next) {
             rule_bitvec *v = scratch_get_or_create(&s_port, (uint64_t)p->port);
             rvec_set(v, rule->id);
         }
+
+        /* --- protos --- (unchanged) */
         if (rule->protos & PROTO_TCP) {
             rule_bitvec *v = scratch_get_or_create(&s_proto, PROTO_TCP);
             rvec_set(v, rule->id);
@@ -483,7 +526,13 @@ static int eid_ord_by_hash(uint64_t hash) {
 
 /* Dump a bagmap as "KEY -> BAG[id]" rows. Key formatter is pluggable.
  * When `sort_as_eid` is set, we sort keys by their EID ordinal so output
- * reads EID[0], EID[1], EID[2], ...; otherwise we sort by raw key. */
+ * reads EID[0], EID[1], EID[2], ...; otherwise we sort by raw key.
+ *
+ * The ANY_EID slot (key == 0 in an EID-keyed bag) is always sorted first
+ * — we give it sort key INT_MIN-equivalent (-2) so it precedes the lowest
+ * concrete EID ordinal (0). This makes the "ALL_EIDS" line read at the
+ * top of bag_src / bag_dst output, which matches the runtime semantics
+ * of "this is the floor that gets OR'd into every concrete-EID lookup". */
 static void print_map(const char *name, const bagmap *b,
                       void (*fmt_key)(uint64_t, char *, size_t),
                       int sort_as_eid) {
@@ -495,8 +544,15 @@ static void print_map(const char *name, const bagmap *b,
         if (b->slots[i].state) {
             arr[n].key    = b->slots[i].key;
             arr[n].id     = b->slots[i].id;
-            arr[n].sort_k = sort_as_eid ? eid_ord_by_hash(b->slots[i].key)
-                                        : (int)b->slots[i].key;
+            if (sort_as_eid) {
+                /* ANY_EID floats to the top with a sort key below any
+                 * real ordinal (0..N-1). */
+                arr[n].sort_k = (b->slots[i].key == ANY_EID)
+                    ? -1
+                    : eid_ord_by_hash(b->slots[i].key);
+            } else {
+                arr[n].sort_k = (int)b->slots[i].key;
+            }
             n++;
         }
     /* Bubble-sort — small n. */
@@ -513,6 +569,10 @@ static void print_map(const char *name, const bagmap *b,
 }
 
 static void fmt_eid_key(uint64_t h, char *buf, size_t n) {
+    /* The ANY_EID sentinel renders as "ALL_EIDS" so readers can see at a
+     * glance which rules apply to every EID (including unresolved IPs).
+     * This is the slot the runtime OR's into every per-EID lookup. */
+    if (h == ANY_EID) { snprintf(buf, n, "ALL_EIDS"); return; }
     int ord = eid_ord_by_hash(h);
     if (ord >= 0) snprintf(buf, n, "EID[%d]", ord);
     else          snprintf(buf, n, "0x%llx", (unsigned long long)h);
