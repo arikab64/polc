@@ -795,14 +795,15 @@ static void print_selector(const sel_node *s) {
     }
 }
 
-/* Sentinel detectors — for round-trip rendering. */
-static int subnet_is_and_any(const subnet_node *s) {
+/* Sentinel detectors — for round-trip rendering and unresolved-rule
+ * triage in resolve.c. */
+int subnet_is_and_any(const subnet_node *s) {
     return s && s->kind == SN_RANGE
             && s->range_lo == 0x00000001u
             && s->range_hi == 0xFFFFFFFFu;
 }
 
-static int subnet_is_or_any(const subnet_node *s) {
+int subnet_is_or_any(const subnet_node *s) {
     return s && s->kind == SN_CIDR
             && s->addr == 0u
             && s->prefix == 32;

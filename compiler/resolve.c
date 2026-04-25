@@ -251,6 +251,17 @@ static resolved_rule *resolve_one(const rule_node *r) {
 
 extern rule_node *rule_list_head(void);   /* defined in main.c */
 
+/* True iff the rule has any user-supplied subnet clause (i.e. at least
+ * one of its four subnet trees is not the parser-injected sentinel).
+ * The compilation phase does not yet handle subnets — such rules are
+ * parked as unresolved. */
+static int rule_has_subnet(const rule_node *r) {
+    return !subnet_is_and_any(r->src_sand)
+        || !subnet_is_or_any (r->src_sor)
+        || !subnet_is_and_any(r->dst_sand)
+        || !subnet_is_or_any (r->dst_sor);
+}
+
 void resolve_all_rules(void) {
     for (rule_node *r = rule_list_head(); r; r = r->next) {
         resolved_rule *rr = resolve_one(r);
@@ -267,15 +278,27 @@ void resolve_all_rules(void) {
         int src_dead = !side_is_all(r->src) && rr->src_eids.n == 0;
         int dst_dead = !side_is_all(r->dst) && rr->dst_eids.n == 0;
 
-        if (src_dead || dst_dead) {
-            const char *which =
-                (src_dead && dst_dead) ? "src and dst" :
-                (src_dead)              ? "src"         :
-                                          "dst";
-            diag_warning(r->line, r->col,
-                "rule R[%d] has no matching entities — %s selector"
-                " matches no EIDs in the current inventory",
-                r->id, which);
+        /* Subnet clauses parse cleanly but are not yet handled by the
+         * compilation phase. Park such rules so the rest of the pipeline
+         * (bags, builder) keeps operating on a subnet-free input. */
+        int has_subnet = rule_has_subnet(r);
+
+        if (src_dead || dst_dead || has_subnet) {
+            if (has_subnet) {
+                diag_warning(r->line, r->col,
+                    "rule R[%d] uses a subnet clause — not yet supported"
+                    " in the compilation phase; parking as unresolved",
+                    r->id);
+            } else {
+                const char *which =
+                    (src_dead && dst_dead) ? "src and dst" :
+                    (src_dead)              ? "src"         :
+                                              "dst";
+                diag_warning(r->line, r->col,
+                    "rule R[%d] has no matching entities — %s selector"
+                    " matches no EIDs in the current inventory",
+                    r->id, which);
+            }
 
             if (g_unresolved_tail) g_unresolved_tail->next = rr;
             else                   g_unresolved = rr;

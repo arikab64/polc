@@ -204,6 +204,11 @@ subnet_node *subnet_binop   (subnet_kind kind, subnet_node *lhs, subnet_node *rh
 subnet_node *mk_subnet_and_any(void);   /* 0.0.0.1 .. 255.255.255.255 */
 subnet_node *mk_subnet_or_any (void);   /* 0.0.0.0 / 32              */
 
+/* Sentinel detectors — true iff the tree IS the corresponding sentinel
+ * (and not a user-supplied subnet). */
+int subnet_is_and_any(const subnet_node *s);
+int subnet_is_or_any (const subnet_node *s);
+
 /* ---------- rule_side: a parser-internal carrier ----------------------
  * Returned by the `side` production. Bundles everything `add_rule` needs
  * to populate one half of a rule. Heap-allocated so it fits in the bison
