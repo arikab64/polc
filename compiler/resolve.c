@@ -99,11 +99,19 @@ static dnf *dnf_and(dnf *a, dnf *b) {
 }
 
 dnf *sel_to_dnf(const sel_node *s) {
-    if (!s) return mk_dnf();   /* empty DNF matches nothing */
+    if (!s) return mk_dnf();   /* defensive — every rule_side carries a sel */
     switch (s->kind) {
         case SEL_LEAF: return dnf_leaf(s->key, s->val);
         case SEL_OR:   return dnf_or (sel_to_dnf(s->lhs), sel_to_dnf(s->rhs));
         case SEL_AND:  return dnf_and(sel_to_dnf(s->lhs), sel_to_dnf(s->rhs));
+        case SEL_ALL: {
+            /* ALL_EIDS: one term with an empty mask. lset_subset(empty, _)
+             * is always true, so this DNF matches every EID. */
+            dnf      *d = mk_dnf();
+            dnf_term *t = mk_term();
+            dnf_append_term(d, t);
+            return d;
+        }
     }
     return mk_dnf();
 }

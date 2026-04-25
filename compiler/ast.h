@@ -115,12 +115,12 @@ label_node *label_append(label_node *head, label_node *node);
 void        add_entity(const char *name, int line, int col,
                        ip_node *ips, label_node *labels);
 
-/* ---------- rule AST -----------------------------------------------------
+/* ---------- selector AST ------------------------------------------------
  * Rules live in their own list, parsed from the `policy:` section.
  *
  * A rule's src/dst selectors are small trees over (key:value) leaves joined
- * by AND/OR. In phase 3 these will be resolved into bitset expressions over
- * the label table and used to populate the three bags.
+ * by AND/OR. In phase 4 these get compiled into DNF and resolved against
+ * the EID label table.
  * ------------------------------------------------------------------------- */
 
 typedef enum {
@@ -130,7 +130,11 @@ typedef enum {
     ACT_OVERRIDE_BLOCK,
 } action_kind;
 
-typedef enum { SEL_LEAF, SEL_AND, SEL_OR } sel_kind;
+/* SEL_ALL is the ALL_EIDS sentinel from LANGUAGE.md §5.2 — a selector that
+ * matches every EID. Materialized by the parser for sides that were bare
+ * `ANY` or a bare subnet, so consumers never have to special-case "no
+ * selector": every rule_side carries a real sel_node. */
+typedef enum { SEL_LEAF, SEL_AND, SEL_OR, SEL_ALL } sel_kind;
 
 typedef struct sel_node {
     sel_kind         kind;
@@ -152,20 +156,107 @@ typedef struct port_node {
     struct port_node  *next;
 } port_node;
 
-/* Rule ids are 0-based and double as bit positions in the three-bag bitvectors
- * (src_bag, dst_bag, port_bag) that phase 3 will build. The cap matches the
- * bitvector width we plan to use there. */
+/* ---------- subnet AST --------------------------------------------------
+ * A side's S_and (and-subnet) and S_or (or-subnet) per LANGUAGE.md §5.2
+ * are each a small boolean tree over CIDR leaves, mirroring the selector
+ * AST shape.
+ *
+ * Per LANGUAGE.md §6.3, the parser MATERIALIZES sentinels for sides that
+ * have no subnet attached, so S_and and S_or are guaranteed non-NULL on
+ * every parsed rule:
+ *
+ *   and-ANY  = 0.0.0.1 - 255.255.255.255   (intersection identity)
+ *   or-ANY   = 0.0.0.0 / 32                (union identity, single addr 0)
+ *
+ * The `range` kind exists specifically to encode and-ANY without faking
+ * it as a CIDR. Real input syntax produces only `cidr` leaves; `range`
+ * is parser-injected.
+ * ------------------------------------------------------------------------- */
+
+typedef enum {
+    SN_CIDR,         /* IP [ '/' NUMBER ]                — leaf */
+    SN_RANGE,        /* low..high (inclusive)            — sentinel-only leaf */
+    SN_AND,          /* internal: intersection           */
+    SN_OR,           /* internal: union                  */
+} subnet_kind;
+
+typedef struct subnet_node {
+    subnet_kind          kind;
+    /* leaves */
+    uint32_t             addr;       /* SN_CIDR: network address (host order)   */
+    int                  prefix;     /* SN_CIDR: 0..32                          */
+    uint32_t             range_lo;   /* SN_RANGE: inclusive low                 */
+    uint32_t             range_hi;   /* SN_RANGE: inclusive high                */
+    /* binops */
+    struct subnet_node  *lhs;
+    struct subnet_node  *rhs;
+    /* common */
+    int                  line, col;  /* source position (sentinels carry 0,0)   */
+} subnet_node;
+
+/* Subnet constructors (defined in main.c). */
+subnet_node *mk_subnet_cidr (uint32_t addr, int prefix, int line, int col);
+subnet_node *mk_subnet_range(uint32_t lo,   uint32_t hi, int line, int col);
+subnet_node *subnet_binop   (subnet_kind kind, subnet_node *lhs, subnet_node *rhs);
+
+/* Sentinel constructors — fresh tree per call so each rule owns its
+ * subtree (uniform free walk, no aliasing). */
+subnet_node *mk_subnet_and_any(void);   /* 0.0.0.1 .. 255.255.255.255 */
+subnet_node *mk_subnet_or_any (void);   /* 0.0.0.0 / 32              */
+
+/* ---------- rule_side: a parser-internal carrier ----------------------
+ * Returned by the `side` production. Bundles everything `add_rule` needs
+ * to populate one half of a rule. Heap-allocated so it fits in the bison
+ * %union as a pointer; freed by add_rule once consumed.
+ * ----------------------------------------------------------------------- */
+
+typedef struct rule_side {
+    sel_node    *sel;           /* never NULL — SEL_ALL sentinel if bare ANY  */
+    subnet_node *sand;          /* never NULL — mk_subnet_and_any() if absent */
+    subnet_node *sor;           /* never NULL — mk_subnet_or_any()  if absent */
+} rule_side;
+
+rule_side *mk_side_any  (void);
+rule_side *mk_side_sel  (sel_node *sel);                      /* sel only           */
+rule_side *mk_side_and  (sel_node *sel, subnet_node *sub);    /* sel AND subnet     */
+rule_side *mk_side_or   (sel_node *sel, subnet_node *sub);    /* sel OR subnet      */
+rule_side *mk_side_subn (subnet_node *sub);                   /* bare subnet        */
+
+/* ---------- rule AST ---------------------------------------------------
+ * A rule carries a full side per LANGUAGE.md §5.2 — the selector L
+ * matches by EID, and the two subnet trees S_and / S_or narrow / broaden
+ * by IP. The (L, S_and, S_or) triple is per side, so we have it twice
+ * (src and dst).
+ *
+ * Bare `ANY` keyword (or a bare subnet — same rule per §5.2 row 5)
+ * yields a `SEL_ALL` selector node (the ALL_EIDS sentinel). Phase 4 sees
+ * a uniform `sel != NULL` and dispatches on `sel->kind`.
+ *
+ * Rule ids are 0-based and double as bit positions in the three-bag
+ * bitvectors that phase 6 will build.
+ * ----------------------------------------------------------------------- */
+
 #define MAX_RULES       4096
 #define MAX_RULE_ID     (MAX_RULES - 1)
 
 typedef struct rule_node {
-    int               id;        /* 0-based — matches bit position in bags */
+    int               id;        /* 0-based — bit position in bags */
     action_kind       action;
-    sel_node         *src;
-    sel_node         *dst;
+
+    /* src side */
+    sel_node         *src;             /* never NULL — SEL_ALL if bare ANY */
+    subnet_node      *src_sand;        /* never NULL (sentinel)            */
+    subnet_node      *src_sor;         /* never NULL (sentinel)            */
+
+    /* dst side */
+    sel_node         *dst;             /* never NULL — SEL_ALL if bare ANY */
+    subnet_node      *dst_sand;        /* never NULL (sentinel)            */
+    subnet_node      *dst_sor;         /* never NULL (sentinel)            */
+
     port_node        *ports;
-    unsigned          protos;    /* bitmask of PROTO_* */
-    int               line, col; /* position of the action keyword */
+    unsigned          protos;          /* bitmask of PROTO_*      */
+
+    int               line, col;       /* position of the action keyword */
     struct rule_node *next;
 } rule_node;
 
@@ -188,6 +279,7 @@ port_node  *var_port_lookup (const char *name);
 /* selector constructors */
 sel_node  *sel_leaf(const char *k, const char *v, int line, int col);
 sel_node  *sel_binop(sel_kind kind, sel_node *lhs, sel_node *rhs);
+sel_node  *sel_all  (void);   /* ALL_EIDS sentinel — matches every EID */
 
 /* Build a right-folded OR-chain from a label list. A single-element list
  * becomes a plain leaf; a multi-element list becomes
@@ -198,8 +290,12 @@ sel_node  *sel_from_labels(label_node *labels);
 port_node *mk_port(int p, int line, int col);
 port_node *port_append(port_node *head, port_node *node);
 
+/* add_rule consumes the rule_side wrappers (frees them after copying
+ * fields out). The caller is responsible for nothing once add_rule
+ * returns — even on the rule-table-overflow error path, all incoming
+ * AST is freed. */
 void       add_rule(action_kind a, int line, int col,
-                    sel_node *src, sel_node *dst,
+                    rule_side *src, rule_side *dst,
                     port_node *ports, unsigned protos);
 
 void       print_rules(void);

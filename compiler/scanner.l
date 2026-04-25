@@ -9,6 +9,11 @@
  *         @var definitions. Grammar disambiguates: in label values (e.g.
  *         `app:ANY`) the `value` production accepts ANY as a string, so
  *         labels keep working even though ANY is a keyword token.
+ *
+ * Punctuation addition:
+ *   '/' — CIDR prefix separator (e.g. 10.0.0.0/16). Single-char literal
+ *         token; flex's longest-match guarantees IPs still tokenize as
+ *         IP, not as a partial-IP-then-slash sequence.
  */
 %option noyywrap nounput noinput yylineno
 %{
@@ -83,6 +88,7 @@ NAME    [A-Za-z_][A-Za-z0-9_\-\.]*
 "("             { return '('; }
 ")"             { return ')'; }
 "-"             { return '-'; }
+"/"             { return '/'; }      /* CIDR prefix separator */
 
 {IP}            { yylval.str = strdup(yytext); return IP; }
 {NUMBER}        { yylval.num = atoi(yytext); return NUMBER; }

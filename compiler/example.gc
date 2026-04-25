@@ -1,69 +1,196 @@
-# policy.gc — example using the new rule syntax.
+# example.gc — comprehensive walkthrough of the gc policy language.
 #
-# Rule shape:  ACTION src_selector -> dst_selector :PORTS :PROTOS ;
-# PORTS  := ANY | N | N-M | N,M,K-L,...   (comma list, range with '-')
-# PROTOS := ANY | TCP | UDP | TCP,UDP
-# Port 0 is the numeric equivalent of ANY and is only legal standalone.
+# Rule shape:  ACTION src_side -> dst_side :PORTS :PROTOS ;
+#   side    := ANY | selector | selector AND subnet | selector OR subnet | subnet
+#   ports   := ANY | N | N-M | N,M,K-L,...     (port 0 is alias for ANY)
+#   protos  := ANY | TCP | UDP | TCP,UDP
+#
+// Two comment styles are accepted: `#` (shell) and `//` (C). Both run to EOL.
 
 vars:
 
-# Label variables.
-$production   = env:production;
-$staging      = env:staging;
-$backendApps  = [ app:api-backend app:postgres ];
-$webApps      = [ app:web-front ];
+# ---------- label vars ($) ---------------------------------------------------
+# Single label — substituted as a leaf wherever $name appears.
+$production    = env:production;
+$staging       = env:staging;
 
-# Port variables — comma lists and ranges; no brackets.
-@http         = 80,8080;
-@https        = 443;
-@postgres     = 5432;
-@ssh          = 22;
-@api          = 8000-8080;
-@metrics      = 9090,9100,9115;
-@wildcard     = ANY;          # stored as port 0; use it anywhere :@wildcard is written
+# Bracketed list — expanded as an OR-chain when used in a selector.
+$webApps       = [ app:web-front app:api-gateway ];
+$dbApps        = [ app:postgres app:redis ];
+$infraTeam     = [ team:platform team:sre ];
+
+# ---------- port vars (@) ----------------------------------------------------
+@http          = 80, 8080;          # comma list
+@https         = 443;               # single port
+@ssh           = 22;
+@postgres      = 5432;
+@redis         = 6379;
+@apiRange      = 8000-8080;         # range
+@metrics       = 9090, 9100, 9115;  # mixed list
+@allPorts      = ANY;               # whole-port wildcard (stored as port 0)
 
 inventory:
 
-web-prod-1 [10.0.0.1] => [ app:web-front $production ];
+# ---------- single IP, single label -----------------------------------------
+edge-lb-1     [10.0.0.1]                            => [ app:edge-lb $production ];
 
-web-prod-2 [10.0.1.10 10.0.1.11] => [
+# ---------- multi-label entity using vars + literals ------------------------
+web-prod-1    [10.0.1.10]                           => [
     app:web-front
     $production
     role:server
+    tier:frontend
 ];
 
-api-prod-1 [10.0.2.20 10.0.2.21 10.0.2.22] => [
+# ---------- multi-IP entity (IP set, single EID) ----------------------------
+web-prod-2    [10.0.1.11 10.0.1.12 10.0.1.13]       => [
+    app:web-front
+    $production
+    role:server
+    tier:frontend
+];
+
+# Note: web-prod-1 and web-prod-2 share an identical label set, so they
+# collapse into the SAME EID — the IP set is just unioned.
+
+api-gw-prod   [10.0.2.20 10.0.2.21]                 => [
+    app:api-gateway
+    $production
+    role:server
+    tier:edge
+];
+
+api-be-prod   [10.0.2.30 10.0.2.31 10.0.2.32]       => [
     app:api-backend
     $production
     role:server
     tier:backend
 ];
 
-db-prod-1 [10.0.3.50] => [ app:postgres $production role:database ];
+db-prod       [10.0.3.50]                           => [
+    app:postgres
+    $production
+    role:database
+    tier:data
+];
+
+cache-prod    [10.0.3.60 10.0.3.61]                 => [
+    app:redis
+    $production
+    role:cache
+    tier:data
+];
+
+mon-prod      [10.0.9.10]                           => [
+    app:prometheus
+    $production
+    role:monitoring
+];
+
+# Staging counterpart (different env label → different EID).
+api-be-stg    [10.1.2.30]                           => [
+    app:api-backend
+    $staging
+    role:server
+];
+
+# Operator laptops — show off a non-server EID using a list-valued var.
+sre-laptop-1  [10.0.250.10]                         => [ team:sre   role:operator ];
+sre-laptop-2  [10.0.250.11]                         => [ team:platform role:operator ];
 
 policy:
 
-# Bare single label src, literal port, literal proto.
-ALLOW app:web-front -> app:api-backend :80 :TCP;
+# ============================================================================
+# Section A — §5.2 side forms (rows the current parser accepts)
+# ============================================================================
+# NOTE: rows 3 and 4 of §5.2 (`selector AND subnet`, `selector OR subnet`)
+# are valid in the spec but not yet accepted by the grammar — see the
+# AMBIGUITY NOTE at the top of parser.y. Until the lexer emits a distinct
+# CIDR token, those forms must be expressed via a bare-subnet side or
+# split into two rules.
 
-# AND-composed selector with a port variable that's itself a list.
-ALLOW app:web-front AND $production -> app:api-backend AND $production :@http :TCP;
+# A1. selector -> selector            (most common shape)
+ALLOW app:web-front -> app:api-gateway :@http :TCP;
 
-# Bracketed selector list (OR over items), mixing vars and literals.
-ALLOW [$webApps app:api-backend] -> role:database :@postgres :TCP;
+# A2. ANY keyword on src              (whole-side wildcard, ALL_EIDS)
+ALLOW ANY -> app:prometheus :@metrics :TCP;
 
-# Port range — expanded at parse time.
-ALLOW $webApps -> app:api-backend :8000-8080 :TCP;
+# A3. bare subnet -> bare subnet      (pure IP rule, no labels involved)
+ALLOW 192.168.10.0/24 -> 10.0.0.0/16 :ANY :ANY;
 
-# Mixed list: literals, range, and proto list.
-ALLOW (app:web-front OR app:api-backend) AND $production
-    -> role:database :5432,@http :TCP,UDP;
+# A4. bare subnet on one side, selector on the other.
+ALLOW 10.0.0.0/8 -> app:prometheus :@metrics :TCP;
 
-# Wildcard port, single proto.
-ALLOW role:monitoring -> role:server :ANY :TCP;
+# ============================================================================
+# Section B — selector composition
+# ============================================================================
 
-# Wildcard port AND wildcard proto — expands to TCP|UDP at compile time.
-ALLOW app:api-backend AND $production -> role:database :ANY :ANY;
+# B1. AND of two leaves.
+ALLOW app:web-front AND $production -> app:api-gateway AND $production
+    :@https :TCP;
 
-# OVERRIDE rule with literal port.
+# B2. OR via a bracketed label list ([…] is sugar for OR over items).
+ALLOW [$webApps app:api-backend] -> $dbApps :@postgres,@redis :TCP;
+
+# B3. Parenthesised subexpression mixing AND/OR.
+ALLOW (app:web-front OR app:api-gateway) AND $production
+    -> role:database AND $production
+    :@postgres :TCP,UDP;
+
+# B4. Variable expansion — $infraTeam expands to (team:platform OR team:sre).
+ALLOW $infraTeam -> ANY :@ssh :TCP;
+
+# ============================================================================
+# Section C — subnet expressions (bare-subnet sides)
+# ============================================================================
+
+# C1. OR-tree of CIDRs as a bare subnet side.
+ALLOW (10.0.2.30 OR 10.0.2.31) -> app:postgres :@postgres :TCP;
+
+# C2. AND-tree narrows the IP set: must satisfy both ranges.
+ALLOW (10.0.0.0/8 AND 10.0.2.0/24) -> app:postgres :@postgres :TCP;
+
+# C3. Mixed AND/OR subnet expression with parens.
+ALLOW (10.0.2.0/24 OR (10.0.3.0/24 AND 10.0.3.50/32)) -> app:redis
+    :@redis :TCP;
+
+# C4. /32 implicit when prefix omitted.
+ALLOW 10.0.0.1 -> ANY :@http :TCP;
+
+# ============================================================================
+# Section D — ports & protocols (every form)
+# ============================================================================
+
+# D1. Single literal port, single proto.
+ALLOW app:web-front -> app:api-gateway :443 :TCP;
+
+# D2. Comma list of literals.
+ALLOW app:api-gateway -> app:api-backend :8080,8081,8082 :TCP;
+
+# D3. Range expansion.
+ALLOW app:api-gateway -> app:api-backend :@apiRange :TCP;
+
+# D4. Mixed: var + literals + ranges all in one list.
+ALLOW app:api-backend AND $production -> app:postgres
+    :5432,@http,9000-9010 :TCP,UDP;
+
+# D5. UDP only.
+ALLOW app:prometheus -> ANY :161 :UDP;
+
+# D6. Wildcard port + wildcard proto (expands to TCP,UDP).
+ALLOW app:api-backend AND $production -> $dbApps :ANY :ANY;
+
+# ============================================================================
+# Section E — actions
+# ============================================================================
+
+# E1. ALLOW — already used throughout above.
+
+# E2. BLOCK — deny by default override at normal precedence.
+BLOCK $staging -> $production :ANY :ANY;
+
+# E3. OVERRIDE-ALLOW — high-precedence allow (e.g. break-glass).
+OVERRIDE-ALLOW $infraTeam -> ANY :@ssh :TCP;
+
+# E4. OVERRIDE-BLOCK — high-precedence block (e.g. emergency lockdown).
 OVERRIDE-BLOCK $production -> $staging :@ssh :TCP;

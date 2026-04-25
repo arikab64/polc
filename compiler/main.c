@@ -278,7 +278,7 @@ void add_entity(const char *name, int ent_line, int ent_col,
 }
 
 /* ============================================================
- *  PRETTY-PRINTERS
+ *  PRETTY-PRINTERS (label table, identities)
  * ============================================================ */
 
 void print_label_table(void) {
@@ -500,11 +500,12 @@ sel_node *sel_from_labels(label_node *labels) {
 }
 
 /* ============================================================
- *  POLICY RULES
+ *  SELECTOR & PORT CONSTRUCTORS
  * ============================================================ */
 
 /* Forward decls so add_rule's overflow path can clean up. */
 static void free_sel(sel_node *s);
+static void free_subnet(subnet_node *s);
 
 static rule_node *g_rules      = NULL;
 static rule_node *g_rules_tail = NULL;
@@ -532,6 +533,12 @@ sel_node *sel_binop(sel_kind kind, sel_node *lhs, sel_node *rhs) {
     return n;
 }
 
+sel_node *sel_all(void) {
+    sel_node *n = calloc(1, sizeof *n);
+    n->kind = SEL_ALL;
+    return n;
+}
+
 port_node *mk_port(int p, int line, int col) {
     port_node *n = calloc(1, sizeof *n);
     n->port = p;
@@ -548,19 +555,151 @@ port_node *port_append(port_node *head, port_node *node) {
     return head;
 }
 
+/* ============================================================
+ *  SUBNET AST
+ * ============================================================ */
+
+subnet_node *mk_subnet_cidr(uint32_t addr, int prefix, int line, int col) {
+    subnet_node *n = calloc(1, sizeof *n);
+    n->kind   = SN_CIDR;
+    n->addr   = addr;
+    n->prefix = prefix;
+    n->line   = line;
+    n->col    = col;
+    return n;
+}
+
+subnet_node *mk_subnet_range(uint32_t lo, uint32_t hi, int line, int col) {
+    subnet_node *n = calloc(1, sizeof *n);
+    n->kind     = SN_RANGE;
+    n->range_lo = lo;
+    n->range_hi = hi;
+    n->line     = line;
+    n->col      = col;
+    return n;
+}
+
+subnet_node *subnet_binop(subnet_kind kind, subnet_node *lhs, subnet_node *rhs) {
+    subnet_node *n = calloc(1, sizeof *n);
+    n->kind = kind;
+    n->lhs  = lhs;
+    n->rhs  = rhs;
+    n->line = lhs ? lhs->line : 0;
+    n->col  = lhs ? lhs->col  : 0;
+    return n;
+}
+
+/* Sentinels — fresh tree per call so each rule owns its subtree.
+ *
+ * and-ANY is the intersection identity: every non-zero IPv4 address.
+ * We model it as a SN_RANGE rather than a CIDR because no single CIDR
+ * captures 0.0.0.1..255.255.255.255 (that range is 0/0 minus the host
+ * 0.0.0.0). Encoding it directly as a range keeps the semantics exact
+ * and avoids needing a "negation" node just for this one sentinel.
+ *
+ * or-ANY is the union identity: empty in effect (only matches 0.0.0.0,
+ * which is never a real source/destination). Encoded as 0.0.0.0/32 per
+ * §6.3. */
+subnet_node *mk_subnet_and_any(void) {
+    return mk_subnet_range(0x00000001u, 0xFFFFFFFFu, 0, 0);
+}
+
+subnet_node *mk_subnet_or_any(void) {
+    return mk_subnet_cidr(0x00000000u, 32, 0, 0);
+}
+
+static void free_subnet(subnet_node *s) {
+    if (!s) return;
+    if (s->kind == SN_AND || s->kind == SN_OR) {
+        free_subnet(s->lhs);
+        free_subnet(s->rhs);
+    }
+    free(s);
+}
+
+/* ============================================================
+ *  RULE_SIDE — parser-internal carriers
+ * ============================================================
+ *
+ * Each constructor materialises whichever sentinels the caller didn't
+ * supply, so by the time add_rule sees the side both sand and sor are
+ * non-NULL. add_rule frees the rule_side wrapper after copying the
+ * fields out.
+ */
+
+rule_side *mk_side_any(void) {
+    rule_side *s = calloc(1, sizeof *s);
+    s->sel       = sel_all();
+    s->sand      = mk_subnet_and_any();
+    s->sor       = mk_subnet_or_any();
+    return s;
+}
+
+rule_side *mk_side_sel(sel_node *sel) {
+    rule_side *s = calloc(1, sizeof *s);
+    s->sel  = sel;
+    s->sand = mk_subnet_and_any();
+    s->sor  = mk_subnet_or_any();
+    return s;
+}
+
+rule_side *mk_side_and(sel_node *sel, subnet_node *sub) {
+    rule_side *s = calloc(1, sizeof *s);
+    s->sel  = sel;
+    s->sand = sub;                  /* user-supplied AND-subnet     */
+    s->sor  = mk_subnet_or_any();   /* OR-subnet defaults to or-ANY */
+    return s;
+}
+
+rule_side *mk_side_or(sel_node *sel, subnet_node *sub) {
+    rule_side *s = calloc(1, sizeof *s);
+    s->sel  = sel;
+    s->sand = mk_subnet_and_any();  /* AND-subnet defaults to and-ANY */
+    s->sor  = sub;                  /* user-supplied OR-subnet        */
+    return s;
+}
+
+rule_side *mk_side_subn(subnet_node *sub) {
+    /* Bare subnet form per §5.2 row 5: L=ALL_EIDS, S_and=subnet,
+     * S_or=or-ANY. Same triple shape as `selector AND subnet` except
+     * the selector is the ALL_EIDS sentinel. */
+    rule_side *s = calloc(1, sizeof *s);
+    s->sel       = sel_all();
+    s->sand      = sub;
+    s->sor       = mk_subnet_or_any();
+    return s;
+}
+
+/* ============================================================
+ *  add_rule — invoked once per parsed rule from the grammar
+ * ============================================================ */
+
 void add_rule(action_kind a, int line, int col,
-              sel_node *src, sel_node *dst,
-              port_node *ports, unsigned protos) {
+              rule_side *src, rule_side *dst,
+              port_node *ports, unsigned protos)
+{
     static int next_id = 0;
 
     /* Enforce the rule cap. Going over means we'd need a wider bitvector
-     * in the bags — reject rather than silently truncate. */
+     * in the bags — reject rather than silently truncate. Free everything
+     * we were handed (including the sides' subnet trees) so we don't leak. */
     if (next_id > MAX_RULE_ID) {
         diag_error(line, col,
             "rule table full — limit is %d rules", MAX_RULES);
         g_semantic_errors++;
-        /* Still free incoming AST so we don't leak. */
-        free_sel(src); free_sel(dst);
+
+        if (src) {
+            free_sel   (src->sel);
+            free_subnet(src->sand);
+            free_subnet(src->sor);
+            free(src);
+        }
+        if (dst) {
+            free_sel   (dst->sel);
+            free_subnet(dst->sand);
+            free_subnet(dst->sor);
+            free(dst);
+        }
         while (ports) { port_node *n = ports->next; free(ports); ports = n; }
         return;
     }
@@ -568,8 +707,18 @@ void add_rule(action_kind a, int line, int col,
     rule_node *r = calloc(1, sizeof *r);
     r->id     = next_id++;
     r->action = a;
-    r->src    = src;
-    r->dst    = dst;
+
+    /* Move the side fields into the rule_node, then free the wrapper. */
+    r->src           = src->sel;
+    r->src_sand      = src->sand;
+    r->src_sor       = src->sor;
+    free(src);
+
+    r->dst           = dst->sel;
+    r->dst_sand      = dst->sand;
+    r->dst_sor       = dst->sor;
+    free(dst);
+
     r->ports  = ports;
     r->protos = protos;
     r->line   = line;
@@ -581,7 +730,7 @@ void add_rule(action_kind a, int line, int col,
      * in multi-element lists or ranges. Anything outside this range is
      * a genuine error. Done here so the error message can point at the
      * specific port token. */
-    for (port_node *p = ports; p; p = p->next) {
+    for (port_node *p = r->ports; p; p = p->next) {
         if (p->port < 0 || p->port > 65535) {
             diag_error(p->line, p->col,
                 "port %d out of range (must be 0..65535, where 0 = ANY)",
@@ -593,6 +742,16 @@ void add_rule(action_kind a, int line, int col,
     if (g_rules_tail) g_rules_tail->next = r; else g_rules = r;
     g_rules_tail = r;
 }
+
+/* ============================================================
+ *  RULE PRETTY-PRINTING
+ * ============================================================
+ *
+ * The printer's job is round-trippable readability: every rule should
+ * print in a form that, modulo whitespace, parses back to the same AST.
+ * That means showing AND/OR-subnets explicitly when they're non-sentinel,
+ * and rendering bare ANY when both selector and subnets are at their
+ * identity values. */
 
 static const char *action_name(action_kind a) {
     switch (a) {
@@ -630,7 +789,86 @@ static void print_selector(const sel_node *s) {
             if (s->rhs && s->rhs->kind == SEL_AND) { printf("("); print_selector(s->rhs); printf(")"); }
             else                                    print_selector(s->rhs);
             break;
+        case SEL_ALL:
+            printf("ANY");
+            break;
     }
+}
+
+/* Sentinel detectors — for round-trip rendering. */
+static int subnet_is_and_any(const subnet_node *s) {
+    return s && s->kind == SN_RANGE
+            && s->range_lo == 0x00000001u
+            && s->range_hi == 0xFFFFFFFFu;
+}
+
+static int subnet_is_or_any(const subnet_node *s) {
+    return s && s->kind == SN_CIDR
+            && s->addr == 0u
+            && s->prefix == 32;
+}
+
+static void print_subnet(const subnet_node *s) {
+    if (!s) { printf("<null>"); return; }
+    char buf[16];
+    switch (s->kind) {
+    case SN_CIDR:
+        printf("%s/%d", ip_fmt(s->addr, buf), s->prefix);
+        return;
+    case SN_RANGE:
+        if (subnet_is_and_any(s)) { printf("and-ANY"); return; }
+        {
+            char buf2[16];
+            printf("%s..%s", ip_fmt(s->range_lo, buf), ip_fmt(s->range_hi, buf2));
+        }
+        return;
+    case SN_AND:
+        printf("(");
+        print_subnet(s->lhs); printf(" AND "); print_subnet(s->rhs);
+        printf(")");
+        return;
+    case SN_OR:
+        printf("(");
+        print_subnet(s->lhs); printf(" OR ");  print_subnet(s->rhs);
+        printf(")");
+        return;
+    }
+}
+
+/* Render one side using the §5.2 mapping in reverse. */
+static void print_side(const sel_node *sel,
+                       const subnet_node *sand, const subnet_node *sor)
+{
+    int match_all = (sel->kind == SEL_ALL);
+    int sand_id   = subnet_is_and_any(sand);
+    int sor_id    = subnet_is_or_any (sor);
+
+    /* row 1: ANY (ALL_EIDS selector, both subnets at identity) */
+    if (match_all && sand_id && sor_id) { printf("ANY"); return; }
+
+    /* row 5: bare subnet (ALL_EIDS selector, sand non-identity, sor at identity) */
+    if (match_all && !sand_id && sor_id) { print_subnet(sand); return; }
+
+    /* row 2: selector only */
+    if (!match_all && sand_id && sor_id) { print_selector(sel); return; }
+
+    /* row 3: selector AND subnet */
+    if (!match_all && !sand_id && sor_id) {
+        print_selector(sel); printf(" AND "); print_subnet(sand); return;
+    }
+
+    /* row 4: selector OR subnet */
+    if (!match_all && sand_id && !sor_id) {
+        print_selector(sel); printf(" OR "); print_subnet(sor); return;
+    }
+
+    /* Catch-all — combinations the grammar doesn't produce, but render
+     * something sensible if they ever appear (e.g. via direct AST edits). */
+    printf("[");
+    print_selector(sel);
+    printf(", S_and="); print_subnet(sand);
+    printf(", S_or=");  print_subnet(sor);
+    printf("]");
 }
 
 void print_rules(void) {
@@ -643,8 +881,15 @@ void print_rules(void) {
 
     for (rule_node *r = g_rules; r; r = r->next) {
         printf("\nR[%d] %s\n", r->id, action_name(r->action));
-        printf("     src    : "); print_selector(r->src); printf("\n");
-        printf("     dst    : "); print_selector(r->dst); printf("\n");
+
+        printf("     src    : ");
+        print_side(r->src, r->src_sand, r->src_sor);
+        printf("\n");
+
+        printf("     dst    : ");
+        print_side(r->dst, r->dst_sand, r->dst_sor);
+        printf("\n");
+
         printf("     ports  : ");
         /* A single port_node with value 0 is the ANY wildcard — render
          * it symbolically. Any other list prints numerically; a stray 0
@@ -677,11 +922,20 @@ void print_rules(void) {
 
 static void free_sel(sel_node *s) {
     if (!s) return;
-    if (s->kind == SEL_LEAF) { free(s->key); free(s->val); }
-    else { free_sel(s->lhs); free_sel(s->rhs); }
+    switch (s->kind) {
+        case SEL_LEAF: free(s->key); free(s->val);          break;
+        case SEL_AND:
+        case SEL_OR:   free_sel(s->lhs); free_sel(s->rhs);  break;
+        case SEL_ALL:                                       break;
+    }
     free(s);
 }
 
+/* free_rules / free_ports are only invoked from main() at shutdown — gate
+ * them under !POLC_TESTING so the test build doesn't trip
+ * -Wunused-function. free_sel / free_subnet stay outside the gate because
+ * add_rule's overflow path also calls them. */
+#ifndef POLC_TESTING
 static void free_ports(port_node *p) {
     while (p) { port_node *n = p->next; free(p); p = n; }
 }
@@ -690,18 +944,30 @@ static void free_rules(void) {
     rule_node *r = g_rules;
     while (r) {
         rule_node *n = r->next;
-        free_sel(r->src);
-        free_sel(r->dst);
-        free_ports(r->ports);
+        free_sel   (r->src);
+        free_subnet(r->src_sand);
+        free_subnet(r->src_sor);
+        free_sel   (r->dst);
+        free_subnet(r->dst_sand);
+        free_subnet(r->dst_sor);
+        free_ports (r->ports);
         free(r);
         r = n;
     }
     g_rules = g_rules_tail = NULL;
 }
+#endif
 
 /* ============================================================
  *  IPCACHE — populate from parsed identities, then pretty-print
  * ============================================================ */
+
+/* Everything from here to the end of the file is CLI-side glue:
+ * build_ipcache / print_ipcache, the slurp/usage helpers, and main().
+ * The unit test binary builds with -DPOLC_TESTING so it can link a
+ * standalone AST library without dragging in ipcache, resolve, bags,
+ * builder, dump, sqlite, or the parser/scanner objects. */
+#ifndef POLC_TESTING
 
 /* Walk every identity's member IPs and populate the IP → EID hashtable.
  * Skips invalid IPs (parse failed earlier). Reports as an internal error
@@ -780,6 +1046,8 @@ void print_ipcache(void) {
     free(arr);
 }
 
+#endif /* !POLC_TESTING (CLI block 1: ipcache helpers & print_ipcache) */
+
 /* ============================================================
  *  CLEANUP
  * ============================================================ */
@@ -844,8 +1112,9 @@ void free_all(void) {
 }
 
 /* ============================================================
- *  MAIN
+ *  MAIN — CLI driver (excluded from the unit-test build).
  * ============================================================ */
+#ifndef POLC_TESTING
 
 /* Slurp an entire FILE* into a NUL-terminated malloc'd buffer.
  * Caller frees. Returns NULL on I/O error. */
@@ -1080,3 +1349,5 @@ int main(int argc, char **argv) {
     ipcache_free();
     return rc;
 }
+
+#endif /* !POLC_TESTING (CLI block 2: slurp..main) */
