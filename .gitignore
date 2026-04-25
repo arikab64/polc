@@ -65,3 +65,4 @@ lex.yy.c
 web/node_modules/
 web/package-lock.json
 web/.vite
+run_tests
