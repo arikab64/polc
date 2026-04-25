@@ -117,36 +117,59 @@ To maintain the match formula, the compiler inserts identity elements for missin
 
 ## 7. Grammar (EBNF)
 
+Terminals (`NAME`, `NUMBER`, `IP`, `VAR_LABEL`, `VAR_PORT`) are defined in §1.3. The grammar uses `{ X }` for zero-or-more and `[ X ]` for optional.
+
 ```ebnf
 program        = [ vars_sec ] [ inv_sec ] [ policy_sec ] ;
 
+(* Variables — see §3 *)
 vars_sec       = "vars:" { var_def } ;
-var_def        = VAR_LABEL "=" ( label_item | "[" { label_item } "]" ) ";"
-               | VAR_PORT "=" port_val ";" ;
+var_def        = VAR_LABEL "=" ( label | "[" { label } "]" ) ";"
+               | VAR_PORT  "=" port_val ";" ;
 
+(* Inventory — see §4 *)
 inv_sec        = "inventory:" { entity } ;
 entity         = NAME "[" { IP } "]" "=>" "[" { label_ref } "]" ";" ;
 
+(* Policy — see §5 *)
 policy_sec     = "policy:" { rule } ;
 rule           = action side "->" side ":" port_spec ":" proto_spec ";" ;
+action         = "ALLOW" | "BLOCK" | "OVERRIDE-ALLOW" | "OVERRIDE-BLOCK" ;
 
+(* Sides — the three alternatives map to the five rows of §5.2's table *)
 side           = "ANY"
                | selector [ ( "AND" | "OR" ) subnet_clause ]
                | subnet_expr ;
 
+(* Selectors *)
 selector       = and_expr { "OR" and_expr } ;
 and_expr       = primary_sel { "AND" primary_sel } ;
-primary_sel    = NAME ":" value | VAR_LABEL | "(" selector ")" | "[" { label_ref } "]" ;
+primary_sel    = NAME ":" value
+               | VAR_LABEL
+               | "(" selector ")"
+               | "[" { label_ref } "]" ;
 
-subnet_clause  = cidr | "(" subnet_expr ")" ;
+(* Subnets *)
 subnet_expr    = sub_and { "OR" sub_and } ;
 sub_and        = sub_prim { "AND" sub_prim } ;
 sub_prim       = cidr | "(" subnet_expr ")" ;
-
+subnet_clause  = cidr | "(" subnet_expr ")" ;
 cidr           = IP [ "/" NUMBER ] ;
+
+(* Ports and protocols *)
 port_spec      = "ANY" | port_item { "," port_item } ;
+port_val       = port_item { "," port_item } ;
+port_item      = NUMBER [ "-" NUMBER ] | "ANY" ;
 proto_spec     = "ANY" | proto { "," proto } ;
+proto          = "TCP" | "UDP" ;
+
+(* Labels and label values *)
+label          = NAME ":" value ;
+label_ref      = label | VAR_LABEL ;
+value          = NAME | IP | "ANY" ;
 ```
+
+**Note on `subnet_clause` vs `subnet_expr`.** When a subnet is joined to a selector via the side-level `AND`/`OR` (the second `side` alternative), only a `subnet_clause` — a single `cidr` or a parenthesized `subnet_expr` — is permitted on the right. This avoids ambiguity between the side-level `AND`/`OR` and the subnet-internal `AND`/`OR`: a multi-clause subnet in that position **must** be parenthesized. A standalone subnet side (the third `side` alternative) has no such restriction and accepts a full `subnet_expr`. See §9.3 ("Complex Subnets") for an example.
 
 ---
 
